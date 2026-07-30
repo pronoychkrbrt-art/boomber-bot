@@ -2,11 +2,14 @@ import sys
 import subprocess
 import os
 import asyncio
+import time
 from threading import Thread
 from flask import Flask
 
 # 🌐 Render Free Web Service Keep-Alive Server
 flask_app = Flask('')
+
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://boomber-bot.onrender.com/")
 
 @flask_app.route('/')
 def home():
@@ -16,10 +19,24 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
+# 🔄 Self-Ping Background Thread (Render Sleep Preventer)
+def self_ping():
+    while True:
+        time.sleep(240) # 4 mins
+        try:
+            requests.get(RENDER_URL, timeout=10)
+            print("🔄 Render Keep-Alive Self-Ping Successful!")
+        except Exception as e:
+            print(f"⚠️ Self-Ping Warning: {e}")
+
 def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+    t1 = Thread(target=run_flask)
+    t1.daemon = True
+    t1.start()
+    
+    t2 = Thread(target=self_ping)
+    t2.daemon = True
+    t2.start()
 
 keep_alive()
 
@@ -187,47 +204,6 @@ def check_vip_status(tg_user):
         return True
     return u.get("is_vip", False)
 
-# 🎯 Accurate Hit Extractor (Parses total_sent & total_failed from JSON)
-def parse_hit_response(data_obj):
-    if isinstance(data_obj, str):
-        try:
-            data_obj = json.loads(data_obj)
-        except Exception:
-            return 0, 1
-
-    if isinstance(data_obj, dict):
-        sent = data_obj.get("total_sent")
-        failed = data_obj.get("total_failed")
-
-        # Fallback to general keys if API parameter names vary
-        if sent is None:
-            for k in ["sent", "total_success", "success_sms", "success_count"]:
-                if k in data_obj and data_obj[k] is not None:
-                    sent = data_obj[k]
-                    break
-
-        if failed is None:
-            for k in ["failed", "total_failure", "failure", "fail_sms", "failed_count"]:
-                if k in data_obj and data_obj[k] is not None:
-                    failed = data_obj[k]
-                    break
-
-        try: sent = int(sent) if sent is not None else 0
-        except (ValueError, TypeError): sent = 0
-
-        try: failed = int(failed) if failed is not None else 0
-        except (ValueError, TypeError): failed = 0
-
-        if sent == 0 and failed == 0:
-            if data_obj.get("success") is True or data_obj.get("status") == "success":
-                sent, failed = 1, 0
-            else:
-                sent, failed = 0, 1
-
-        return sent, failed
-
-    return 0, 1
-
 temp_data = {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -341,11 +317,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== CALLBACKS =====================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # 💥 Safe Query Answer (Prevents Timeout Crash on Render Logs)
-    try:
-        await query.answer()
-    except Exception:
-        pass
+    
+    # Safe Query Answer
+    try: await query.answer()
+    except Exception: pass
         
     user = query.from_user
     if not user: return
@@ -362,18 +337,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🛑 Bombing Cancel Button Handler
+    # 🛑 Strict Instant Cancel Trigger
     elif query.data.startswith('cancel_bombing_'):
         target_uid = int(query.data.split('_')[2])
         if user_id == target_uid or is_admin(user_id):
             if target_uid in temp_data:
                 temp_data[target_uid]['cancel'] = True
-                try:
-                    await query.answer("🛑 বোম্বিং বাতিল করা হচ্ছে...", show_alert=True)
+                try: await query.answer("🛑 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
                 except Exception: pass
         else:
-            try:
-                await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
+            try: await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
             except Exception: pass
 
 # ===================== ADMIN COMMANDS =====================
@@ -467,7 +440,6 @@ async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/addvip USER_ID DAYS</code>", parse_mode="HTML")
 
-# 💥 FIX: Send notification message to user on /removevip
 async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
@@ -477,7 +449,6 @@ async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"🚫 <b>ইউজার <code>{target_id}</code> এর VIP সুবিধা বাতিল করা হয়েছে!</b>", parse_mode="HTML")
         
-        # Notify Target User
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
@@ -791,7 +762,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING & CANCEL REFUND ENGINE =====
+    # ===== BOMBING LOOP WITH ACCURATE SMS COUNT & INSTANT CANCEL =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -799,7 +770,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_cost = 0 if is_vip else amount * POINT_PER_HIT
             
             if amount < 1 or amount > 20:
-                await update.message.reply_text("❌ ১-২০ এর মধ্যে হিট দিন!", reply_markup=get_back_keyboard())
+                await update.message.reply_text("❌ অ্যামাউন্ট ১-২০ এর মধ্যে হতে হবে!", reply_markup=get_back_keyboard())
                 return
             
             if not is_vip and u.get('points', 0) < total_cost:
@@ -808,7 +779,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             number = temp_data[user_id]['number']
             
-            # Initial deduction for total requested hits
+            # Initial Deduction
             if not is_vip:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
@@ -831,57 +802,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             spinners = ["⏳", "⌛", "⚡", "💥"]
             
             for i in range(amount):
-                # 🛑 Cancel Check & Refund Implementation
+                # 🎯 Pre-Hit Cancel Check
                 if temp_data.get(user_id, {}).get('cancel', False):
-                    unexecuted_hits = amount - completed_hits
-                    refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
-                    
-                    if refund_points > 0 and users_col is not None:
-                        users_col.update_one({"user_id": user_id}, {"$inc": {"points": refund_points}}, upsert=True)
-                    
-                    fresh_u = get_user_data(user)
-                    balance_info = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
-                    
-                    total_reqs = total_sent_count + total_failed_count
-                    success_rate = round((total_sent_count / total_reqs) * 100, 1) if total_reqs > 0 else 0.0
-
-                    await msg.edit_text(
-                        f"🛑 <b>বোম্বিং মাঝপথে বাতিল করা হয়েছে!</b>\n\n"
-                        f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"💥 সম্পন্ন হিট: <b>{completed_hits} / {amount}</b>\n"
-                        f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
-                        f"📊 সফলতার হার: <b>{success_rate}%</b>\n\n"
-                        f"💵 মোট কাটা হয়েছিল: <b>{total_cost} Pts</b>\n"
-                        f"🎁 ফেরত দেওয়া হয়েছে: <b>+{refund_points} Points</b>\n"
-                        f"💳 বর্তমান ব্যালেন্স: <b>{balance_info}</b>",
-                        parse_mode="HTML"
-                    )
                     break
 
                 try:
-                    # Async non-blocking HTTP call to prevent Render freezes
-                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=10)
+                    # Async non-blocking API call
+                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=15)
                     
+                    # 💥 EXACT SMS Counting Logic From bot 3.py
                     if api_response.status_code == 200:
                         response_data = api_response.json()
-                        if isinstance(response_data, str): 
+
+                        if isinstance(response_data, str):
                             response_data = json.loads(response_data)
-                        
+
                         if isinstance(response_data, dict):
-                            last_response = response_data
-                            sent, failed = parse_hit_response(response_data)
-                            total_sent_count += sent
-                            total_failed_count += failed
+                            last_response = response_data  # Save creator & service info
+
+                            sent = response_data.get("total_sent", 0)
+                            failed = response_data.get("total_failed", 0)
+
+                            total_sent_count += int(sent)
+                            total_failed_count += int(failed)
                         else:
                             total_sent_count += 1
                     else:
                         total_failed_count += 1
+                        print(f"HTTP Error: {api_response.status_code}")
+
                 except Exception as e:
                     total_failed_count += 1
-                    print(f"Error hit {i+1}: {e}")
+                    print(f"Error occurred during hit {i+1}: {e}")
                 
                 completed_hits += 1
+                
+                # 🎯 Post-Hit Instant Cancel Check & Point Refund
+                if temp_data.get(user_id, {}).get('cancel', False):
+                    break
+
                 percent = int((completed_hits / amount) * 100)
                 filled = int(10 * completed_hits // amount)
                 bar = '▰' * filled + '▱' * (10 - filled)
@@ -899,10 +858,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception: pass
                 
-                await asyncio.sleep(1)
+                # Interruptible 1 second delay check
+                for _ in range(10):
+                    if temp_data.get(user_id, {}).get('cancel', False):
+                        break
+                    await asyncio.sleep(0.1)
+
+            # 🛑 Handle Cancellation Refund Execution
+            if temp_data.get(user_id, {}).get('cancel', False):
+                unexecuted_hits = amount - completed_hits
+                refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
+                
+                if refund_points > 0 and users_col is not None:
+                    users_col.update_one({"user_id": user_id}, {"$inc": {"points": refund_points}}, upsert=True)
+                
+                fresh_u = get_user_data(user)
+                balance_info = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
+                
+                total_reqs = total_sent_count + total_failed_count
+                success_rate = round((total_sent_count / total_reqs) * 100, 2) if total_reqs > 0 else 0.0
+
+                await msg.edit_text(
+                    f"🛑 <b>বোম্বিং সাথে সাথে বাতিল করা হয়েছে!</b>\n\n"
+                    f"📱 টার্গেট: <code>{number}</code>\n"
+                    f"💥 সম্পন্ন হিট: <b>{completed_hits} / {amount}</b>\n"
+                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
+                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
+                    f"📊 সফলতার হার: <b>{success_rate}%</b>\n\n"
+                    f"💵 কাটা হয়েছিল: <b>{total_cost} Pts</b>\n"
+                    f"🎁 ফেরত দেওয়া হয়েছে: <b>+{refund_points} Points</b>\n"
+                    f"💳 বর্তমান ব্যালেন্স: <b>{balance_info}</b>",
+                    parse_mode="HTML"
+                )
             
-            # Normal completion (if not cancelled)
-            if not temp_data.get(user_id, {}).get('cancel', False):
+            # Normal completion
+            else:
                 total_requests = total_sent_count + total_failed_count
                 
                 if users_col is not None:
@@ -920,7 +910,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fresh_u = get_user_data(user)
                 creator = last_response.get('creator', 'BCZ Team')
                 service = last_response.get('service', 'Master API Gateway')
-                success_rate = round((total_sent_count / total_requests) * 100, 1) if total_requests > 0 else 0.0
+                success_rate = round((total_sent_count / total_requests) * 100, 2) if total_requests > 0 else 0
                 
                 cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
                 balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
@@ -932,6 +922,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
                     f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
                     f"📊 সফলতার হার: <b>{success_rate}%</b>\n"
+                    f"📤 মোট রিকোয়েস্ট: <b>{total_requests}</b>\n"
                     f"💰 খরচ: <b>{cost_text}</b>\n"
                     f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
                     f"🛠 সার্ভিস: {service}\n"
@@ -942,7 +933,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🏠 মেইন মেনু", reply_markup=get_main_keyboard(user_id))
             if user_id in temp_data: del temp_data[user_id]
                 
-        except ValueError: await update.message.reply_text("❌ ভুল ইনপুট! সংখ্যা দিন।", reply_markup=get_back_keyboard())
+        except ValueError: await update.message.reply_text("❌ ভুল ইনপুট! দয়া করে সংখ্যা দিন।", reply_markup=get_back_keyboard())
 
 # ===================== MAIN FUNCTION =====================
 def main():
