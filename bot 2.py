@@ -317,7 +317,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== CALLBACKS =====================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    
     user = query.from_user
     if not user: return
     user_id = user.id
@@ -334,6 +333,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
+
+    # ⏳ Loading Button Callback Answer
+    elif query.data == 'loading_status':
+        try:
+            await query.answer("⏳ বোম্বিং চলছে, দয়া করে অপেক্ষা করুন...", show_alert=False)
+        except Exception:
+            pass
 
 # ===================== ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -748,7 +754,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP (EXACT bot3.py SYSTEM WITH NO CANCEL BUTTON & FULL TIMEOUT) =====
+    # ===== BOMBING LOOP WITH LOADING INLINE BUTTON =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -773,13 +779,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
             
-            # Processing initial message (Exact bot 3.py style)
+            # Helper function for dynamic loading button
+            def get_loading_kbd(percent):
+                return InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"⏳ BOMBING IN PROGRESS... ({percent}%)", callback_data="loading_status")
+                ]])
+
+            # Processing initial message with Loading Button
             msg = await update.message.reply_text(
                 f"⏳ <b>বোম্বিং শুরু হচ্ছে...</b>\n\n"
                 f"📱 টার্গেট: <code>{number}</code>\n"
                 f"💥 হিট: {amount} বার\n"
                 f"⏰ দয়া করে অপেক্ষা করুন...",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=get_loading_kbd(0)
             )
             
             total_sent_count = 0
@@ -817,7 +830,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_failed_count += 1
                     print(f"Error hit {i+1}: {e}")
                 
-                # Live progress update (Exact bot 3.py style)
+                percent = int(((i + 1) / amount) * 100)
+
+                # Live progress update with dynamic Loading Button
                 try:
                     await msg.edit_text(
                         f"⏳ <b>বোম্বিং চলছে...</b>\n\n"
@@ -825,7 +840,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
                         f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
                         f"📊 প্রগ্রেস: <b>{i+1}/{amount} হিট</b>",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        reply_markup=get_loading_kbd(percent)
                     )
                 except Exception:
                     pass
@@ -901,7 +917,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH EXACT bot3.py ACCURACY!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH LOADING BUTTON & ACCURATE COUNTS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
