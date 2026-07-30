@@ -48,7 +48,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== কনফিগারেশন =====================
-TOKEN = "8706041204:AAGY-xEjUe3FsFP1G3rxNA7ulOVCpX_SHFs"
+TOKEN = "8706041204:AAGJ_C6N-UmRzpLUWbV2sCKhSxfHKoWTYG8"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 
