@@ -747,7 +747,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP (EXACT bot3.py ACCURACY & NO CANCEL BUTTON) =====
+    # ===== BOMBING LOOP WITH VISUAL PROGRESS/LOADING BAR & EXACT bot3.py ACCURACY =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -772,12 +772,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
             
-            # Initial Loading Message (Exact bot3.py style)
+            # Initial Loading Message
             msg = await update.message.reply_text(
-                f"⏳ <b>বোম্বিং শুরু হচ্ছে...</b>\n\n"
+                f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
                 f"📱 টার্গেট: <code>{number}</code>\n"
-                f"💥 হিট: {amount} বার\n"
-                f"⏰ দয়া করে অপেক্ষা করুন...",
+                f"📊 প্রগ্রেস: <code>[▱▱▱▱▱▱▱▱▱▱]</code> <b>0% (হিট: 0/{amount})</b>\n\n"
+                f"✅ মোট সফল SMS: <b>0</b>\n"
+                f"❌ মোট ব্যর্থ SMS: <b>0</b>",
                 parse_mode="HTML"
             )
             
@@ -817,14 +818,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_failed_count += 1
                     print(f"Error occurred during hit {i+1}: {e}")
                 
-                # Live progress text update (Exact bot3.py style)
+                # Visual Progress Loading Bar Calculation
+                percent = int(((i + 1) / amount) * 100)
+                filled = int(10 * (i + 1) // amount)
+                bar = '▰' * filled + '▱' * (10 - filled)
+                
+                # Live visual progress & SMS count update
                 try:
                     await msg.edit_text(
-                        f"⏳ <b>বোম্বিং চলছে...</b>\n\n"
+                        f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
                         f"📱 টার্গেট: <code>{number}</code>\n"
+                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}% (হিট: {i+1}/{amount})</b>\n\n"
                         f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
-                        f"📊 প্রগ্রেস: <b>{i+1}/{amount} হিট</b>",
+                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
                         parse_mode="HTML"
                     )
                 except Exception:
@@ -901,7 +907,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH EXACT bot3.py ACCURACY!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH VISUAL PROGRESS BAR & ACCURATE SMS COUNTS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
