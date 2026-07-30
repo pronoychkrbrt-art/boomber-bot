@@ -93,14 +93,13 @@ try:
     promos_col = db.get_collection("promos")
     mongo_client.admin.command('ping')
     print("==================================================")
-    print("🍃 MongoDB Atlas Connected Successfully with SSL!")
+    print("🍃 MongoDB Atlas Connected Successfully!")
     print("==================================================")
 except Exception as e:
     print(f"⚠️ MongoDB Atlas Warning: {e}. Fallback to Memory.")
 
 # ===================== DATABASE HELPER FUNCTIONS =====================
 def get_settings():
-    """ Always fetch fresh settings from MongoDB if connected """
     try:
         if settings_col is not None:
             s = settings_col.find_one({"_id": "global_settings"})
@@ -122,10 +121,7 @@ def update_settings(fields):
         print(f"Error updating settings: {e}")
 
 def get_user_data(tg_user):
-    """ Always fetch and sync accurate Telegram Profile & Points from MongoDB """
-    if not tg_user:
-        return None
-    
+    if not tg_user: return None
     user_id = tg_user.id
     first_name = tg_user.first_name if tg_user.first_name else "User"
     username = tg_user.username if tg_user.username else "N/A"
@@ -191,50 +187,46 @@ def check_vip_status(tg_user):
         return True
     return u.get("is_vip", False)
 
-# 🎯 Cumulative SMS Count Extractor (Reads response parameters per hit)
+# 🎯 Accurate Hit Extractor (Parses total_sent & total_failed from JSON)
 def parse_hit_response(data_obj):
     if isinstance(data_obj, str):
         try:
             data_obj = json.loads(data_obj)
         except Exception:
-            return 1, 0
+            return 0, 1
 
     if isinstance(data_obj, dict):
-        sent = None
-        failed = None
+        sent = data_obj.get("total_sent")
+        failed = data_obj.get("total_failed")
 
-        # Check sent parameters
-        for k in ["total_sent", "sent", "total_success", "success", "success_sms", "successful", "success_count"]:
-            if k in data_obj and data_obj[k] is not None:
-                try:
-                    v = data_obj[k]
-                    sent = 1 if isinstance(v, bool) and v else int(v)
+        # Fallback to general keys if API parameter names vary
+        if sent is None:
+            for k in ["sent", "total_success", "success_sms", "success_count"]:
+                if k in data_obj and data_obj[k] is not None:
+                    sent = data_obj[k]
                     break
-                except (ValueError, TypeError):
-                    pass
 
-        # Check failed parameters
-        for k in ["total_failed", "failed", "total_failure", "failure", "fail_sms", "fail", "failed_count"]:
-            if k in data_obj and data_obj[k] is not None:
-                try:
-                    v = data_obj[k]
-                    failed = 1 if isinstance(v, bool) and v else int(v)
+        if failed is None:
+            for k in ["failed", "total_failure", "failure", "fail_sms", "failed_count"]:
+                if k in data_obj and data_obj[k] is not None:
+                    failed = data_obj[k]
                     break
-                except (ValueError, TypeError):
-                    pass
 
-        if sent is None and failed is None:
-            if data_obj.get("status") == "success" or data_obj.get("success") is True:
+        try: sent = int(sent) if sent is not None else 0
+        except (ValueError, TypeError): sent = 0
+
+        try: failed = int(failed) if failed is not None else 0
+        except (ValueError, TypeError): failed = 0
+
+        if sent == 0 and failed == 0:
+            if data_obj.get("success") is True or data_obj.get("status") == "success":
                 sent, failed = 1, 0
             else:
                 sent, failed = 0, 1
-        else:
-            if sent is None: sent = 0
-            if failed is None: failed = 0
 
         return sent, failed
 
-    return 1, 0
+    return 0, 1
 
 temp_data = {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -318,12 +310,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Auto Point Claim from Mini App Deep Link
     if context.args and context.args[0].lower() == 'claim20pts':
         pts = 20
-        u['points'] += pts
-        try:
-            if users_col is not None:
-                users_col.update_one({"user_id": user.id}, {"$inc": {"points": pts}}, upsert=True)
-        except Exception as e:
-            print(f"Claim update error: {e}")
+        if users_col is not None:
+            users_col.update_one({"user_id": user.id}, {"$inc": {"points": pts}}, upsert=True)
+        u = get_user_data(user)
 
         await update.message.reply_text(
             f"🎉 <b>এড দেখা সফল হয়েছে!</b>\n\n"
@@ -338,7 +327,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].isdigit():
         ref_id = int(context.args[0])
         if ref_id != user.id and u.get('referred_by') is None:
-            u['referred_by'] = ref_id
             try:
                 if users_col is not None:
                     users_col.update_one({"user_id": user.id}, {"$set": {"referred_by": ref_id}}, upsert=True)
@@ -353,7 +341,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== CALLBACKS =====================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    # 💥 Safe Query Answer (Prevents Timeout Crash on Render Logs)
+    try:
+        await query.answer()
+    except Exception:
+        pass
+        
     user = query.from_user
     if not user: return
     user_id = user.id
@@ -369,15 +362,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # Bombing Cancel Button
+    # 🛑 Bombing Cancel Button Handler
     elif query.data.startswith('cancel_bombing_'):
         target_uid = int(query.data.split('_')[2])
         if user_id == target_uid or is_admin(user_id):
             if target_uid in temp_data:
                 temp_data[target_uid]['cancel'] = True
-                await query.answer("🛑 বোম্বিং বাতিল করা হচ্ছে...", show_alert=True)
+                try:
+                    await query.answer("🛑 বোম্বিং বাতিল করা হচ্ছে...", show_alert=True)
+                except Exception: pass
         else:
-            await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
+            try:
+                await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
+            except Exception: pass
 
 # ===================== ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -470,13 +467,26 @@ async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/addvip USER_ID DAYS</code>", parse_mode="HTML")
 
+# 💥 FIX: Send notification message to user on /removevip
 async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         target_id = int(context.args[0])
         if users_col is not None:
             users_col.update_one({"user_id": target_id}, {"$set": {"is_vip": False, "vip_expiry": None}}, upsert=True)
+        
         await update.message.reply_text(f"🚫 <b>ইউজার <code>{target_id}</code> এর VIP সুবিধা বাতিল করা হয়েছে!</b>", parse_mode="HTML")
+        
+        # Notify Target User
+        try:
+            await context.bot.send_message(
+                chat_id=target_id, 
+                text="🚫 <b>আপনার VIP মেম্বারশিপ বাতিল বা মেয়াদ শেষ করা হয়েছে।</b>\nএখন থেকে বোম্বিং করতে পয়েন্ট প্রয়োজন হবে।", 
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {target_id}: {e}")
+            
     except Exception:
         await update.message.reply_text("❌ ব্যবহার: <code>/removevip USER_ID</code>", parse_mode="HTML")
 
@@ -530,9 +540,7 @@ async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         st = get_settings()
-        total_u = 0
-        vips = 0
-        total_pts = 0
+        total_u, vips, total_pts = 0, 0, 0
         
         if users_col is not None:
             total_u = users_col.count_documents({})
@@ -598,11 +606,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(last_b, str): last_b = datetime.fromisoformat(last_b)
             time_passed = (datetime.now() - last_b).seconds
             if time_passed < COOLDOWN_SECONDS:
-                await update.message.reply_text(f"⏳ <b>অপেক্ষা করুন!</b>\n\nআবার বোম্বিং করতে পারবেন: <b>{COOLDOWN_SECONDS - time_passed} সেকেন্ড</b> পর।\n👑 <i>VIP মেম্বারদের কোনো কুলডাউন নেই!</i>", parse_mode="HTML")
+                await update.message.reply_text(f"⏳ <b>স্প্যাম রোধে অপেক্ষা করুন!</b>\n\nআবার বোম্বিং করতে পারবেন: <b>{COOLDOWN_SECONDS - time_passed} সেকেন্ড</b> পর।\n👑 <i>VIP মেম্বারদের ওয়েটিং টাইম নেই!</i>", parse_mode="HTML")
                 return
 
         if not is_vip and u.get('points', 0) < POINT_PER_HIT:
-            await update.message.reply_text(f"❌ <b>পর্যাপ্ত পয়েন্ট নেই!</b>\n💰 ব্যালেন্স: <b>{u.get('points', 0)} Points</b>\n👉 '💰 EARN POINTS' থেকে ফ্রি পয়েন্ট সংগ্রহ করুন!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
+            await update.message.reply_text(f"❌ <b>পর্যাপ্ত পয়েন্ট নেই!</b>\n💰 ব্যালেন্স: <b>{u.get('points', 0)} Points</b>\n👉 '💰 EARN POINTS' থেকে ফ্রি পয়েন্ট নিন!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
             return
 
         temp_data[user_id] = {'step': 'awaiting_number', 'cancel': False}
@@ -783,63 +791,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING & PROGRESS BAR PROCESS =====
+    # ===== BOMBING & CANCEL REFUND ENGINE =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
             is_vip = check_vip_status(user)
-            cost = 0 if is_vip else amount * POINT_PER_HIT
+            total_cost = 0 if is_vip else amount * POINT_PER_HIT
             
             if amount < 1 or amount > 20:
                 await update.message.reply_text("❌ ১-২০ এর মধ্যে হিট দিন!", reply_markup=get_back_keyboard())
                 return
             
-            if not is_vip and u.get('points', 0) < cost:
-                await update.message.reply_text(f"❌ {amount} হিটের জন্য {cost} পয়েন্ট লাগবে।", reply_markup=get_back_keyboard())
+            if not is_vip and u.get('points', 0) < total_cost:
+                await update.message.reply_text(f"❌ {amount} হিটের জন্য {total_cost} পয়েন্ট লাগবে।", reply_markup=get_back_keyboard())
                 return
 
             number = temp_data[user_id]['number']
+            
+            # Initial deduction for total requested hits
             if not is_vip:
                 if users_col is not None:
-                    users_col.update_one({"user_id": user_id}, {"$inc": {"points": -cost}}, upsert=True)
+                    users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
                 
             temp_data[user_id]['cancel'] = False
             
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
             
-            # Cancel Button
             cancel_kbd = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 CANCEL BOMBING", callback_data=f"cancel_bombing_{user_id}")]])
             msg = await update.message.reply_text(f"💣 <b>BOMBING IN PROGRESS...</b>\n\n📱 টার্গেট: <code>{number}</code>\n💥 হিট: {amount} বার", parse_mode="HTML", reply_markup=cancel_kbd)
             
             total_sent_count = 0
             total_failed_count = 0
+            completed_hits = 0
             last_response = {}
             st = get_settings()
             current_api = st.get('api_url', "https://masterapi-sable.vercel.app/send?phone=")
             
             spinners = ["⏳", "⌛", "⚡", "💥"]
-            loop = asyncio.get_event_loop()
             
             for i in range(amount):
-                # Cancel Check
+                # 🛑 Cancel Check & Refund Implementation
                 if temp_data.get(user_id, {}).get('cancel', False):
+                    unexecuted_hits = amount - completed_hits
+                    refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
+                    
+                    if refund_points > 0 and users_col is not None:
+                        users_col.update_one({"user_id": user_id}, {"$inc": {"points": refund_points}}, upsert=True)
+                    
+                    fresh_u = get_user_data(user)
+                    balance_info = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
+                    
+                    total_reqs = total_sent_count + total_failed_count
+                    success_rate = round((total_sent_count / total_reqs) * 100, 1) if total_reqs > 0 else 0.0
+
                     await msg.edit_text(
-                        f"🛑 <b>বোম্বিং বাতিল করা হয়েছে!</b>\n\n"
+                        f"🛑 <b>বোম্বিং মাঝপথে বাতিল করা হয়েছে!</b>\n\n"
                         f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"💥 সম্পন্ন হিট: <b>{i}/{amount}</b>\n"
-                        f"✅ সফল SMS: <b>{total_sent_count}</b>\n"
-                        f"❌ ব্যর্থ SMS: <b>{total_failed_count}</b>",
+                        f"💥 সম্পন্ন হিট: <b>{completed_hits} / {amount}</b>\n"
+                        f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
+                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
+                        f"📊 সফলতার হার: <b>{success_rate}%</b>\n\n"
+                        f"💵 মোট কাটা হয়েছিল: <b>{total_cost} Pts</b>\n"
+                        f"🎁 ফেরত দেওয়া হয়েছে: <b>+{refund_points} Points</b>\n"
+                        f"💳 বর্তমান ব্যালেন্স: <b>{balance_info}</b>",
                         parse_mode="HTML"
                     )
                     break
 
                 try:
-                    # Async Non-blocking API Request
-                    api_response = await loop.run_in_executor(
-                        None, 
-                        lambda: requests.get(f"{current_api}{number}", timeout=10)
-                    )
+                    # Async non-blocking HTTP call to prevent Render freezes
+                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=10)
+                    
                     if api_response.status_code == 200:
                         response_data = api_response.json()
                         if isinstance(response_data, str): 
@@ -847,7 +870,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         if isinstance(response_data, dict):
                             last_response = response_data
-                            # Extract SMS Counts from hit
                             sent, failed = parse_hit_response(response_data)
                             total_sent_count += sent
                             total_failed_count += failed
@@ -859,8 +881,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_failed_count += 1
                     print(f"Error hit {i+1}: {e}")
                 
-                percent = int(((i + 1) / amount) * 100)
-                filled = int(10 * (i + 1) // amount)
+                completed_hits += 1
+                percent = int((completed_hits / amount) * 100)
+                filled = int(10 * completed_hits // amount)
                 bar = '▰' * filled + '▱' * (10 - filled)
                 sp = spinners[i % len(spinners)]
                 
@@ -868,7 +891,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.edit_text(
                         f"💣 <b>BOMBING IN PROGRESS...</b> {sp}\n\n"
                         f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b> (হিট: {i+1}/{amount})\n\n"
+                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b> (হিট: {completed_hits}/{amount})\n\n"
                         f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
                         f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
                         parse_mode="HTML",
@@ -878,7 +901,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 await asyncio.sleep(1)
             
-            # If completed
+            # Normal completion (if not cancelled)
             if not temp_data.get(user_id, {}).get('cancel', False):
                 total_requests = total_sent_count + total_failed_count
                 
@@ -894,13 +917,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         upsert=True
                     )
                 
-                u = get_user_data(user)
+                fresh_u = get_user_data(user)
                 creator = last_response.get('creator', 'BCZ Team')
                 service = last_response.get('service', 'Master API Gateway')
-                success_rate = round((total_sent_count / total_requests) * 100, 2) if total_requests > 0 else 0
+                success_rate = round((total_sent_count / total_requests) * 100, 1) if total_requests > 0 else 0.0
                 
-                cost_text = "FREE (VIP)" if is_vip else f"{cost} Points"
-                balance_text = "VIP Access" if is_vip else f"{u.get('points', 0)} Points"
+                cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
+                balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
                 
                 result_message = (
                     f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
@@ -925,7 +948,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # 🎯 1. Command Handlers
+    # 🎯 Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("users", admin_users))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -940,12 +963,12 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
-    # 🎯 2. Message Handlers
+    # 🎯 Message & Callback Handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ACCURATE SMS COUNTS!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ACCURATE SMS COUNTS & REFUND SYSTEM!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
