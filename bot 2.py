@@ -23,7 +23,7 @@ def keep_alive():
 
 keep_alive()
 
-# 💥 মিসিং লাইব্রেরি অটো-ইনস্টল সেফটি কোড
+# 💥 Auto-install missing packages
 needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi", "flask"]
 for pkg in needed_packages:
     try:
@@ -40,13 +40,14 @@ import logging
 import requests
 import json
 import certifi
+import ssl
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
-# ===================== কনফিগারেশন =====================
+# ===================== CONFIGURATION =====================
 TOKEN = "8706041204:AAGJ_C6N-UmRzpLUWbV2sCKhSxfHKoWTYG8"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
@@ -57,13 +58,13 @@ NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
 # 🍃 MongoDB Atlas Connection String
 MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
 
-# 🎯 পয়েন্ট ও ফি সেটিংস
-INITIAL_POINTS = 50       # নতুন ইউজারের পয়েন্ট
-POINT_PER_HIT = 2         # প্রতি ১ হিটে পয়েন্ট কাটবে
-DAILY_BONUS_POINTS = 20   # ডেইলি বোনাস
-REFERRAL_POINTS = 15      # রেফার বোনাস
-PROTECTION_COST = 100     # নম্বর প্রটেকশন ফি (পয়েন্ট)
-COOLDOWN_SECONDS = 30     # স্প্যাম রোধে ওয়েটিং টাইম (সেকেন্ড)
+# 🎯 Points & Fee Settings
+INITIAL_POINTS = 50       # Initial points for new users
+POINT_PER_HIT = 2         # Points deducted per hit
+DAILY_BONUS_POINTS = 20   # Daily bonus points
+REFERRAL_POINTS = 15      # Referral bonus points
+PROTECTION_COST = 100     # Number protection cost (points)
+COOLDOWN_SECONDS = 30     # Cooldown time between bombing sessions (seconds)
 
 # ===================== MONGODB CONNECTION =====================
 memory_users = {}
@@ -74,6 +75,10 @@ memory_settings = {
 }
 memory_promos = {}
 
+custom_ssl_context = ssl.create_default_context()
+custom_ssl_context.check_hostname = False
+custom_ssl_context.verify_mode = ssl.CERT_NONE
+
 db = None
 users_col = None
 settings_col = None
@@ -83,9 +88,7 @@ try:
     mongo_client = MongoClient(
         MONGO_URI, 
         server_api=ServerApi('1'),
-        tls=True,
-        tlsAllowInvalidCertificates=True,
-        tlsCAFile=certifi.where(),
+        ssl_context=custom_ssl_context,
         serverSelectionTimeoutMS=10000
     )
     db = mongo_client.get_database("sms_bomber_bot")
@@ -99,7 +102,7 @@ try:
 except Exception as e:
     print(f"⚠️ MongoDB Atlas Warning: {e}. Using Hybrid Storage.")
 
-# ===================== ডাটাবেজ হেল্পার ফাংশন =====================
+# ===================== DATABASE HELPER FUNCTIONS =====================
 def get_settings():
     try:
         if settings_col is not None:
@@ -122,6 +125,18 @@ def update_settings(fields):
         print(f"Error updating settings: {e}")
 
 def init_user(user_id, username="N/A", first_name="User"):
+    # Try loading from MongoDB first
+    try:
+        if users_col is not None:
+            u = users_col.find_one({"user_id": user_id})
+            if u:
+                memory_users[user_id] = u
+                if username and username != "N/A": memory_users[user_id]["username"] = username
+                if first_name: memory_users[user_id]["first_name"] = first_name
+                return memory_users[user_id]
+    except Exception as e:
+        print(f"MongoDB Fetch Error: {e}")
+
     if user_id not in memory_users:
         memory_users[user_id] = {
             "user_id": user_id,
@@ -179,49 +194,52 @@ def check_vip_status(user_id):
             try:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$set": {"is_vip": False, "vip_expiry": None}})
-            except: pass
+            except Exception: pass
             return False
         return True
     return u.get("is_vip", False)
 
-# 💥 পাওয়ারফুল ও ফলব্যাক সহ SMS গণনা এক্সট্র্যাক্টর
-def parse_api_response(response_data):
-    if isinstance(response_data, str):
-        try: response_data = json.loads(response_data)
-        except: return 1, 0, {}
+# 🎯 Robust SMS Count Extractor (Sums total_sent & total_failed from each hit)
+def extract_sms_counts(data_obj):
+    if isinstance(data_obj, str):
+        try:
+            data_obj = json.loads(data_obj)
+        except Exception:
+            return 1, 0
 
-    if isinstance(response_data, dict):
+    if isinstance(data_obj, dict):
         sent = 0
         for k in ["total_sent", "sent", "total_success", "success", "success_sms", "successful"]:
-            if k in response_data and response_data[k] is not None:
+            if k in data_obj and data_obj[k] is not None:
                 try:
-                    v = response_data[k]
+                    v = data_obj[k]
                     sent = 1 if isinstance(v, bool) and v else int(v)
                     break
-                except: pass
+                except (ValueError, TypeError):
+                    pass
 
         failed = 0
         for k in ["total_failed", "failed", "total_failure", "failure", "fail_sms"]:
-            if k in response_data and response_data[k] is not None:
+            if k in data_obj and data_obj[k] is not None:
                 try:
-                    v = response_data[k]
+                    v = data_obj[k]
                     failed = 1 if isinstance(v, bool) and v else int(v)
                     break
-                except: pass
+                except (ValueError, TypeError):
+                    pass
 
-        # যদি API 200 OK দেয় কিন্তু কোন সংখ্যা না পাঠায়, তবে ১টি সফল SMS হিসেবে ধরা হবে
-        if sent == 0 and failed == 0:
+        if sent == 0 and failed == 0 and data_obj.get("success") is True:
             sent = 1
 
-        return sent, failed, response_data
+        return sent, failed
 
-    return 1, 0, {}
+    return 1, 0
 
 temp_data = {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ===================== হেল্পারস =====================
+# ===================== HELPERS =====================
 def is_admin(user_id): return user_id == ADMIN_ID
 
 async def get_unjoined_channels(user_id, context):
@@ -236,7 +254,7 @@ async def get_unjoined_channels(user_id, context):
             unjoined.append(ch)
     return unjoined
 
-# ===================== কীবোর্ড =====================
+# ===================== KEYBOARDS =====================
 def get_main_keyboard(user_id):
     keyboard = [
         ["🚀 START BOMBER"],
@@ -250,7 +268,7 @@ def get_main_keyboard(user_id):
 
 def get_back_keyboard(): return ReplyKeyboardMarkup([["🔙 ব্যাক"]], resize_keyboard=True)
 
-# ===================== মেইন মেনু =====================
+# ===================== MAIN MENU =====================
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
@@ -287,16 +305,16 @@ async def send_join_prompt(update: Update, unjoined_channels, is_error=False):
     elif update.callback_query:
         try:
             await update.callback_query.message.edit_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-        except:
+        except Exception:
             await update.callback_query.message.reply_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ===================== স্টার্ট ও অটো ক্লেইম =====================
+# ===================== START & AUTO CLAIM =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
     u = init_user(user.id, user.username, user.first_name)
     
-    # 💥 মিনি অ্যাপ থেকে ডাইরেক্ট অটো পয়েন্ট ক্লেইম
+    # 💥 Auto Point Claim from Mini App Deep Link
     if context.args and context.args[0].lower() == 'claim20pts':
         pts = 20
         u['points'] += pts
@@ -315,7 +333,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # রেফারাল চেক
+    # Referral Check
     if context.args and context.args[0].isdigit():
         ref_id = int(context.args[0])
         if ref_id != user.id and u.get('referred_by') is None:
@@ -329,13 +347,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     users_col.update_one({"user_id": user.id}, {"$set": {"referred_by": ref_id}}, upsert=True)
                     users_col.update_one({"user_id": ref_id}, {"$inc": {"points": REFERRAL_POINTS, "referral_count": 1}}, upsert=True)
                 await context.bot.send_message(ref_id, f"🎉 <b>নতুন রেফারেল বোনাস!</b>\n➕ পেয়েছেন: <b>+{REFERRAL_POINTS} Points</b>", parse_mode="HTML")
-            except: pass
+            except Exception: pass
 
     unjoined = await get_unjoined_channels(user.id, context)
     if not unjoined: await main_menu(update, context)
     else: await send_join_prompt(update, unjoined)
 
-# ===================== ক্যালব্যাক =====================
+# ===================== CALLBACKS =====================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -348,13 +366,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         unjoined = await get_unjoined_channels(user_id, context)
         if not unjoined:
             try: await query.message.delete()
-            except: pass
+            except Exception: pass
             await update.effective_chat.send_message("🎉 <b>জয়েনিং সফল হয়েছে!</b>", parse_mode="HTML")
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🛑 বোম্বিং ক্যানসেল বাটন হ্যান্ডলার
+    # 🛑 Bombing Cancel Button
     elif query.data.startswith('cancel_bombing_'):
         target_uid = int(query.data.split('_')[2])
         if user_id == target_uid or is_admin(user_id):
@@ -364,7 +382,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
 
-# ===================== অ্যাডমিন কমান্ডস =====================
+# ===================== ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     
@@ -399,7 +417,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(u_id, f"📢 <b>ADMIN NOTICE</b>\n\n{msg_to_send}", parse_mode="HTML")
             s += 1
-        except: f += 1
+        except Exception: f += 1
         await asyncio.sleep(0.04)
     await msg.edit_text(f"✅ <b>ব্রডকাস্ট সম্পন্ন!</b>\n\n🟢 সফল: {s}\n🔴 ব্যর্থ: {f}")
 
@@ -412,7 +430,7 @@ async def admin_makecode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if promos_col is not None:
             promos_col.update_one({"code": code}, {"$set": memory_promos[code]}, upsert=True)
         await update.message.reply_text(f"✅ <b>রিডিম কোড তৈরি হয়েছে!</b>\n🎟 <code>{code}</code> | 💰 {pts} Pts | 👥 {uses} Usages", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/makecode CODE PTS USES DAYS</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/makecode CODE PTS USES DAYS</code>", parse_mode="HTML")
 
 async def admin_addpoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -431,7 +449,7 @@ async def admin_addpoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
         except Exception: pass
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/addpoints USER_ID PTS</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/addpoints USER_ID PTS</code>", parse_mode="HTML")
 
 async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -452,7 +470,7 @@ async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
         except Exception: pass
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/addvip USER_ID DAYS</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/addvip USER_ID DAYS</code>", parse_mode="HTML")
 
 async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -488,7 +506,7 @@ async def admin_protectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE
             if settings_col is not None:
                 settings_col.update_one({"_id": "global_settings"}, {"$push": {"protected_numbers": num}}, upsert=True)
             await update.message.reply_text(f"🛡️ নম্বর <code>{num}</code> প্রটেক্টেড তালিকায় যোগ করা হয়েছে!", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 018XXXXXXXX</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 018XXXXXXXX</code>", parse_mode="HTML")
 
 async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -500,7 +518,7 @@ async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TY
             if settings_col is not None:
                 settings_col.update_one({"_id": "global_settings"}, {"$pull": {"protected_numbers": num}}, upsert=True)
         await update.message.reply_text(f"🗑 নম্বর <code>{num}</code> সরানো হয়েছে।", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 018XXXXXXXX</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 018XXXXXXXX</code>", parse_mode="HTML")
 
 async def admin_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -512,7 +530,7 @@ async def admin_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if settings_col is not None:
                 settings_col.update_one({"_id": "global_settings"}, {"$addToSet": {"channels": ch}}, upsert=True)
         await update.message.reply_text(f"✅ চ্যানেল <code>{ch}</code> যোগ হয়েছে।", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/addchannel @channel</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/addchannel @channel</code>", parse_mode="HTML")
 
 async def admin_removechannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -524,7 +542,7 @@ async def admin_removechannel(update: Update, context: ContextTypes.DEFAULT_TYPE
             if settings_col is not None:
                 settings_col.update_one({"_id": "global_settings"}, {"$pull": {"channels": ch}}, upsert=True)
         await update.message.reply_text(f"🗑 চ্যানেল <code>{ch}</code> রিমুভ হয়েছে।", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/removechannel @channel</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/removechannel @channel</code>", parse_mode="HTML")
 
 async def admin_setapi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -532,7 +550,7 @@ async def admin_setapi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_api = context.args[0]
         update_settings({"api_url": new_api})
         await update.message.reply_text("🌐 <b>API URL চেঞ্জ হয়েছে!</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ ব্যবহার: <code>/setapi URL</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/setapi URL</code>", parse_mode="HTML")
 
 async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -579,7 +597,7 @@ async def admin_panel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-# ===================== মেসেজ হ্যান্ডলার =====================
+# ===================== MESSAGE HANDLERS =====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.message or not update.message.text:
         return
@@ -655,7 +673,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": DAILY_BONUS_POINTS}, "$set": {"last_daily": now}}, upsert=True)
-            except: pass
+            except Exception: pass
             await update.message.reply_text(f"🎉 <b>ডেইলি বোনাস সফল!</b>\n➕ পেয়েছেন: <b>+{DAILY_BONUS_POINTS} Points</b>\n💰 নতুন ব্যালেন্স: <b>{u.get('points', 0)} Points</b>", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
@@ -691,7 +709,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_panel_menu(update, context)
         return
 
-    # ===== ব্যাক বাটন =====
+    # ===== BACK BUTTON =====
     elif message == "🔙 ব্যাক":
         await main_menu(update, context)
         return
@@ -702,11 +720,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = temp_data[user_id].get('step')
 
-    # ===== প্রটেকশন প্রসেস =====
+    # ===== PROTECTION PROCESS =====
     if step == 'awaiting_protection_num':
         num = message.strip()
-        if not num.isdigit() or len(num) < 11:
-            await update.message.reply_text("❌ ভুল নম্বর! ১১ ডিজিটের নম্বর দিন।", reply_markup=get_back_keyboard())
+        if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
+            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> ১১ ডিজিটের বাংলাদেশি নম্বর দিন। (যেমন: 018XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
             return
         
         is_vip = check_vip_status(user_id)
@@ -722,22 +740,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u['points'] -= PROTECTION_COST
                 try:
                     if users_col is not None: users_col.update_one({"user_id": user_id}, {"$inc": {"points": -PROTECTION_COST}}, upsert=True)
-                except: pass
+                except Exception: pass
             try:
                 if settings_col is not None: settings_col.update_one({"_id": "global_settings"}, {"$push": {"protected_numbers": num}}, upsert=True)
-            except: pass
+            except Exception: pass
             await update.message.reply_text(f"🛡️ <b>অভিনন্দন!</b>\nনম্বর <code>{num}</code> প্রটেক্টেড করা হয়েছে!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         else: await update.message.reply_text("⚠️ নম্বরটি আগেই প্রটেক্টেড আছে।", reply_markup=get_main_keyboard(user_id))
         del temp_data[user_id]
         return
 
-    # ===== রিডিম কোড প্রসেস =====
+    # ===== REDEEM CODE PROCESS =====
     if step == 'awaiting_code':
         code = message.strip().upper()
         p_data = memory_promos.get(code)
         if not p_data and promos_col is not None:
             try: p_data = promos_col.find_one({"code": code})
-            except: pass
+            except Exception: pass
             
         if p_data:
             if datetime.now() > p_data['expires_at']: await update.message.reply_text("❌ রিডিম কোডের মেয়াদ শেষ!", reply_markup=get_main_keyboard(user_id))
@@ -750,17 +768,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     if promos_col is not None: promos_col.update_one({"code": code}, {"$inc": {"uses": -1}, "$push": {"used_by": user_id}}, upsert=True)
                     if users_col is not None: users_col.update_one({"user_id": user_id}, {"$inc": {"points": p_data['points']}}, upsert=True)
-                except: pass
+                except Exception: pass
                 await update.message.reply_text(f"🎉 <b>কোড রিডিম সফল!</b>\n➕ পেয়েছেন: <b>+{p_data['points']} Points</b>\n💰 নতুন ব্যালেন্স: <b>{u.get('points', 0)} Points</b>", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         else: await update.message.reply_text("❌ অবৈধ কোড!", reply_markup=get_main_keyboard(user_id))
         del temp_data[user_id]
         return
 
-    # ===== নম্বর ইনপুট =====
+    # ===== NUMBER INPUT =====
     if step == 'awaiting_number':
         num = message.strip()
-        if not num.isdigit() or len(num) < 11:
-            await update.message.reply_text("❌ ভুল নম্বর! ১১ ডিজিটের নম্বর দিন।", reply_markup=get_back_keyboard())
+        if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
+            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> সঠিক ১১ ডিজিটের নম্বর দিন। (যেমন: 018XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
             return
         
         st = get_settings()
@@ -776,7 +794,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== বোম্বিং ও লোডিং প্রগ্রেস বার প্রসেস (ACCURATE PARSER + ASYNC) =====
+    # ===== BOMBING & PROGRESS BAR PROCESS =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -796,16 +814,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u['points'] -= cost
                 try:
                     if users_col is not None: users_col.update_one({"user_id": user_id}, {"$inc": {"points": -cost}}, upsert=True)
-                except: pass
+                except Exception: pass
                 
             u['last_bombing'] = datetime.now()
             temp_data[user_id]['cancel'] = False
             
             try:
                 if users_col is not None: users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
-            except: pass
+            except Exception: pass
             
-            # 🛑 বোম্বিং ক্যানসেল বাটন সহ মেসেজ
+            # 🛑 Cancel Bombing Button
             cancel_kbd = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 CANCEL BOMBING", callback_data=f"cancel_bombing_{user_id}")]])
             msg = await update.message.reply_text(f"💣 <b>BOMBING IN PROGRESS...</b>\n\n📱 টার্গেট: <code>{number}</code>\n💥 হিট: {amount} বার", parse_mode="HTML", reply_markup=cancel_kbd)
             
@@ -819,7 +837,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop = asyncio.get_event_loop()
             
             for i in range(amount):
-                # 🛑 বোম্বিং ক্যানসেল চেক
+                # 🛑 Cancel Check
                 if temp_data.get(user_id, {}).get('cancel', False):
                     await msg.edit_text(
                         f"🛑 <b>বোম্বিং মাঝপথে বাতিল করা হয়েছে!</b>\n\n"
@@ -832,7 +850,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     break
 
                 try:
-                    # 💥 নন-ব্লকিং অ্যাসিনক্রোনাস এপিআই রিকোয়েস্ট
+                    # 💥 Non-blocking Async Request
                     api_response = await loop.run_in_executor(
                         None, 
                         lambda: requests.get(f"{current_api}{number}", timeout=15)
@@ -842,10 +860,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if isinstance(response_data, str): response_data = json.loads(response_data)
                         if isinstance(response_data, dict):
                             last_response = response_data
-                            sent, failed, _ = parse_api_response(response_data)
+                            sent, failed = extract_sms_counts(response_data)
                             total_sent_count += sent
                             total_failed_count += failed
-                except Exception as e: print(f"Error: {e}")
+                        else:
+                            total_sent_count += 1
+                    else:
+                        total_failed_count += 1
+                except Exception as e:
+                    total_failed_count += 1
+                    print(f"Error hit {i+1}: {e}")
                 
                 percent = int(((i + 1) / amount) * 100)
                 filled = int(10 * (i + 1) // amount)
@@ -862,12 +886,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="HTML",
                         reply_markup=cancel_kbd
                     )
-                except: pass
+                except Exception: pass
                 
-                # 💥 নন-ব্লকিং স্লিপ
                 await asyncio.sleep(1)
             
-            # যদি ক্যানসেল না করা হয়ে থাকে
+            # If not cancelled
             if not temp_data.get(user_id, {}).get('cancel', False):
                 total_requests = total_sent_count + total_failed_count
                 u['total_bombing'] = u.get('total_bombing', 0) + 1
@@ -887,7 +910,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             }},
                             upsert=True
                         )
-                except: pass
+                except Exception: pass
                 
                 creator = last_response.get('creator', 'BCZ Team')
                 service = last_response.get('service', 'Master API Gateway')
@@ -915,11 +938,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
         except ValueError: await update.message.reply_text("❌ ভুল ইনপুট! সংখ্যা দিন।", reply_markup=get_back_keyboard())
 
-# ===================== মেইন ফাংশন =====================
+# ===================== MAIN FUNCTION =====================
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # 🎯 ১. কমান্ড হ্যান্ডলারস
+    # 🎯 1. Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("users", admin_users))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -934,12 +957,12 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
-    # 🎯 ২. মেসেজ হ্যান্ডলার
+    # 🎯 2. Message Handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH GUARANTEED DATA PARSING!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ACCURATE SMS COUNTS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
