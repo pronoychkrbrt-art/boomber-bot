@@ -3,3 +3,4 @@ requests
 pymongo
 dnspython
 certifi
+flask
