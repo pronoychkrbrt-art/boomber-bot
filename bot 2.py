@@ -1,8 +1,29 @@
 import sys
 import subprocess
+import os
+from threading import Thread
+from flask import Flask
 
-# 💥 প্রয়োজনীয় লাইব্রেরি অটো-ইনস্টল সেফটি কোড
-needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi"]
+# 🌐 Render Free Web Service Keep-Alive Server (ফ্রি হোস্টিং সেফটি)
+flask_app = Flask('')
+
+@flask_app.route('/')
+def home():
+    return "🤖 SMS Bomber Bot is Running 24/7 Alive!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
+keep_alive()
+
+# 💥 মিসিং লাইব্রেরি অটো-ইনস্টল সেফটি কোড
+needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi", "flask"]
 for pkg in needed_packages:
     try:
         mod_name = "telegram" if pkg == "python-telegram-bot" else pkg
@@ -45,7 +66,7 @@ REFERRAL_POINTS = 15      # রেফার বোনাস
 PROTECTION_COST = 100     # নম্বর প্রটেকশন ফি (পয়েন্ট)
 COOLDOWN_SECONDS = 30     # স্প্যাম রোধে ওয়েটিং টাইম (সেকেন্ড)
 
-# ===================== MONGODB KANNEKTION =====================
+# ===================== MONGODB কানেকশন =====================
 memory_users = {}
 memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
@@ -68,7 +89,7 @@ try:
         MONGO_URI, 
         server_api=ServerApi('1'),
         ssl_context=custom_ssl_context,
-        serverSelectionTimeoutMS=10000
+        serverSelectionTimeoutMS=5000
     )
     db = mongo_client["sms_bomber_bot"]
     users_col = db["users"]
@@ -76,10 +97,10 @@ try:
     promos_col = db["promos"]
     mongo_client.admin.command('ping')
     print("==================================================")
-    print("🍃 MongoDB Atlas Connected Successfully for Render!")
+    print("🍃 MongoDB Atlas Connected Successfully!")
     print("==================================================")
 except Exception as e:
-    print(f"⚠️ MongoDB Atlas Warning: {e}. Using Hybrid Storage.")
+    print(f"⚠️ MongoDB Atlas Warning: {e}. Using Hybrid Fail-Safe Storage.")
 
 # ===================== ডাটাবেজ হেল্পার ফাংশন =====================
 def get_settings():
@@ -359,7 +380,6 @@ async def admin_makecode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ <b>রিডিম কোড তৈরি হয়েছে!</b>\n🎟 <code>{code}</code> | 💰 {pts} Pts | 👥 {uses} Usages", parse_mode="HTML")
     except: await update.message.reply_text("❌ ব্যবহার: <code>/makecode CODE PTS USES DAYS</code>", parse_mode="HTML")
 
-# 🎁 ইউজারকে পয়েন্ট দেওয়ার সাথে ইউজার ইনবক্সে নোটিফিকেশন পাঠানো
 async def admin_addpoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
@@ -369,10 +389,7 @@ async def admin_addpoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": target_id}, {"$inc": {"points": pts}})
             
-        # অ্যাডমিন কনফার্মেশন
         await update.message.reply_text(f"✅ ইউজার <code>{target_id}</code> কে <b>+{pts} Points</b> দেওয়া হয়েছে!", parse_mode="HTML")
-        
-        # 💥 টার্গেট ইউজার নোটিফিকেশন মেসেজ
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -382,7 +399,6 @@ async def admin_addpoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
     except: await update.message.reply_text("❌ ব্যবহার: <code>/addpoints USER_ID PTS</code>", parse_mode="HTML")
 
-# 👑 ইউজারকে VIP দেওয়ার সাথে ইউজার ইনবক্সে নোটিফিকেশন পাঠানো
 async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
@@ -394,10 +410,7 @@ async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": target_id}, {"$set": {"is_vip": True, "vip_expiry": exp}})
             
-        # অ্যাডমিন কনফার্মেশন
         await update.message.reply_text(f"👑 ইউজার <code>{target_id}</code> কে <b>{days} দিনের VIP Access</b> দেওয়া হয়েছে!", parse_mode="HTML")
-        
-        # 💥 টার্গেট ইউজার নোটিফিকেশন মেসেজ
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -407,7 +420,6 @@ async def admin_addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
     except: await update.message.reply_text("❌ ব্যবহার: <code>/addvip USER_ID DAYS</code>", parse_mode="HTML")
 
-# 🚫 ইউজার থেকে VIP বাতিল করার সাথে ইউজার ইনবক্সে নোটিফিকেশন পাঠানো
 async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     if not context.args:
@@ -421,10 +433,7 @@ async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": target_id}, {"$set": {"is_vip": False, "vip_expiry": None}})
         
-        # অ্যাডমিন কনফার্মেশন
-        await update.message.reply_text(f"🚫 <b>ইউজার <code>{target_id}</code> এর VIP সুবিধা বাতিল করা হয়েছে!</b>", parse_mode="HTML")
-        
-        # 💥 টার্গেট ইউজার নোটিফিকেশন মেসেজ
+        await update.message.reply_text(f"🚫 <b>ইউজার <code>{target_id}</code> এর VIP সুবিধা সফলভাবে রিমুভ করা হয়েছে!</b>", parse_mode="HTML")
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
