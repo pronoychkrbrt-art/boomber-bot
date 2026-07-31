@@ -264,7 +264,7 @@ async def send_join_prompt(update: Update, unjoined_channels, is_error=False):
         keyboard.append([InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch.replace('@', '')}")])
     keyboard.append([InlineKeyboardButton("✅ চেক করুন", callback_data='check_join')])
     
-    prefix = "❌ <b>আপনি এখনও সব চ্যানেলে জয়েন করেননি!</b>\n\n" if is_error else "⚠️ <b>বট ব্যবহার করতে নিচের চ্যানেলগুলোতে জয়েন করুন:</b>\n\n"
+    prefix = "❌ <b>বেশি চালাকি না করে চ্যানেলে জয়েন করুন  </b>\n\n" if is_error else "⚠️ <b>বট ব্যবহার করতে নিচের চ্যানেলগুলোতে জয়েন করুন:</b>\n\n"
     
     msg_text = prefix
     for ch in unjoined_channels:
