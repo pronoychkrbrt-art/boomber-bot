@@ -3,8 +3,31 @@ import subprocess
 import os
 import asyncio
 import time
+import logging
 from threading import Thread
 from flask import Flask
+
+# 💥 Auto-install missing packages
+needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi", "flask"]
+for pkg in needed_packages:
+    try:
+        mod_name = "telegram" if pkg == "python-telegram-bot" else pkg
+        __import__(mod_name)
+    except ImportError:
+        print(f"📦 Auto-installing missing module: {pkg}...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+        except Exception as e:
+            print(f"Failed to install {pkg}: {e}")
+
+import requests
+import json
+import certifi
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from pymongo import MongoClient
+from pymongo.server_api import ServerApi
 
 # 🌐 Render Free Web Service Keep-Alive Server
 flask_app = Flask('')
@@ -40,28 +63,8 @@ def keep_alive():
 
 keep_alive()
 
-# 💥 Auto-install missing packages
-needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi", "flask"]
-for pkg in needed_packages:
-    try:
-        mod_name = "telegram" if pkg == "python-telegram-bot" else pkg
-        __import__(mod_name)
-    except ImportError:
-        print(f"📦 Auto-installing missing module: {pkg}...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-        except Exception as e:
-            print(f"Failed to install {pkg}: {e}")
-
-import logging
-import requests
-import json
-import certifi
-from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ===================== CONFIGURATION =====================
 TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
@@ -206,9 +209,6 @@ def check_vip_status(tg_user):
 
 temp_data = {}
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # ===================== HELPERS =====================
 def is_admin(user_id): return user_id == ADMIN_ID
 
@@ -279,16 +279,21 @@ async def send_join_prompt(update: Update, unjoined_channels, is_error=False):
         except Exception:
             await update.callback_query.message.reply_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ===================== START & AUTO CLAIM =====================
+# ===================== START & AUTO CLAIM (+20 PTS) =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
     u = get_user_data(user)
     
+    # 🎯 MONETAG MINI APP REWARD CLAIM HANDLER
     if context.args and context.args[0].lower() == 'claim20pts':
         pts = 20
         if users_col is not None:
             users_col.update_one({"user_id": user.id}, {"$inc": {"points": pts}}, upsert=True)
+            
+        if user.id in memory_users:
+            memory_users[user.id]["points"] = memory_users[user.id].get("points", 0) + pts
+            
         u = get_user_data(user)
 
         await update.message.reply_text(
@@ -747,7 +752,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP WITH VISUAL PROGRESS/LOADING BAR & EXACT bot3.py ACCURACY =====
+    # ===== CUMULATIVE BOMBING LOOP (প্রতি হিটের সাকসেস/ফেইল সঠিকভাবে যোগ হওয়ার লজিক) =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -790,10 +795,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i in range(amount):
                 try:
-                    # 💥 EXACT bot3.py 30-Second Timeout (Allows Master API Gateway to complete all internal SMS)
+                    # 💥 Master API Response Request (30s Timeout)
                     api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
                     
-                    # 💥 EXACT SMS Counting Logic From bot 3.py
                     if api_response.status_code == 200:
                         response_data = api_response.json()
 
@@ -801,17 +805,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             response_data = json.loads(response_data)
 
                         if isinstance(response_data, dict):
-                            last_response = response_data  # Save creator & service info
+                            last_response = response_data  # Store service & creator info
 
-                            sent = response_data.get("total_sent", 0)
-                            failed = response_data.get("total_failed", 0)
+                            # 🎯 CUMULATIVE ADDITION OF EACH HIT (পরের হিটের তথ্য আগেরটির সাথে যোগ করা)
+                            sent = int(response_data.get("total_sent", 0))
+                            failed = int(response_data.get("total_failed", 0))
 
-                            total_sent_count += int(sent)
-                            total_failed_count += int(failed)
+                            total_sent_count += sent
+                            total_failed_count += failed
                         else:
                             total_sent_count += 1
                     else:
-                        print(f"HTTP Error: {api_response.status_code}")
                         total_failed_count += 1
 
                 except Exception as e:
@@ -823,7 +827,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filled = int(10 * (i + 1) // amount)
                 bar = '▰' * filled + '▱' * (10 - filled)
                 
-                # Live visual progress & SMS count update
+                # Live visual progress & cumulative SMS count update
                 try:
                     await msg.edit_text(
                         f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
@@ -836,7 +840,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
                 
-                await asyncio.sleep(1)
+                # ⏳ ওটিপি সীমা এড়াতে প্রতি হিটের মাঝে ৩ সেকেন্ড বিরতি
+                await asyncio.sleep(3)
 
             # Final Calculations & Database Sync
             total_requests = total_sent_count + total_failed_count
@@ -861,7 +866,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
             balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
             
-            # 🎯 Final Result Message (Exact layout as bot 3.py Image 2)
+            # 🎯 Final Cumulative Result Message
             result_message = (
                 f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
                 f"📱 টার্গেট: <code>{number}</code>\n"
@@ -907,7 +912,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH VISUAL PROGRESS BAR & ACCURATE SMS COUNTS!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH VISUAL CUMULATIVE COUNTING!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
