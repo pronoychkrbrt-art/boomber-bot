@@ -752,7 +752,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== CUMULATIVE BOMBING LOOP (প্রতি হিটের সাকসেস/ফেইল সঠিকভাবে যোগ হওয়ার লজিক) =====
+    # ===== BOMBING LOOP (API রেসপন্স পাওয়ার সাথে সাথে পরবর্তী হিট প্রসেস করার লজিক) =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -795,7 +795,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i in range(amount):
                 try:
-                    # 💥 Master API Response Request (30s Timeout)
+                    # 💥 এপিআই থেকে উত্তর না আসা পর্যন্ত কোড অপেক্ষা করবে (Timeout 30s)
                     api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
                     
                     if api_response.status_code == 200:
@@ -805,9 +805,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             response_data = json.loads(response_data)
 
                         if isinstance(response_data, dict):
-                            last_response = response_data  # Store service & creator info
+                            last_response = response_data
 
-                            # 🎯 CUMULATIVE ADDITION OF EACH HIT (পরের হিটের তথ্য আগেরটির সাথে যোগ করা)
                             sent = int(response_data.get("total_sent", 0))
                             failed = int(response_data.get("total_failed", 0))
 
@@ -827,7 +826,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filled = int(10 * (i + 1) // amount)
                 bar = '▰' * filled + '▱' * (10 - filled)
                 
-                # Live visual progress & cumulative SMS count update
+                # Live visual progress & cumulative count update
                 try:
                     await msg.edit_text(
                         f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
@@ -839,9 +838,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception:
                     pass
-                
-                # ⏳ ওটিপি সীমা এড়াতে প্রতি হিটের মাঝে ৩ সেকেন্ড বিরতি
-                await asyncio.sleep(3)
+
+                # ⚡ কোনো কৃত্রিম sleep() নেই, এপিআই উত্তর পাওয়ার সাথে সাথেই পরবর্তী হিট চালু হবে।
 
             # Final Calculations & Database Sync
             total_requests = total_sent_count + total_failed_count
