@@ -334,7 +334,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not unjoined:
             try: await query.message.delete()
             except Exception: pass
-            await update.effective_chat.send_message("🎉 <b>জয়েনিং সফল হয়েছে!</b>\n✅ এখন আপনি আমাদের বটটি ব্যবহার করতে পারবেন </b>\n আপনি চাইলে আমাদের পেজ ঘুরে আসতে পারেন  </b>", parse_mode="HTML")
+            await update.effective_chat.send_message("🎉 <b>জয়েনিং সফল হয়েছে!</b>\n✅ এখন আপনি আমাদের বটটি ব্যবহার করতে পারবেন।\nআপনি চাইলে আমাদের পেজ ঘুরে আসতে পারেন:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Visit our page", url="https://www.facebook.com/profile.php?id=61586369215014")]]))
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
