@@ -78,12 +78,12 @@ NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
 MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
 
 # 🎯 Points & Fee Settings
-INITIAL_POINTS = 50       # Initial points for new users
-POINT_PER_HIT = 2         # Points deducted per hit
-DAILY_BONUS_POINTS = 20   # Daily bonus points
-REFERRAL_POINTS = 15      # Referral bonus points
-PROTECTION_COST = 100     # Number protection cost (points)
-COOLDOWN_SECONDS = 30     # Cooldown time between bombing sessions (seconds)
+INITIAL_POINTS = 2       # Initial points for new users
+POINT_PER_HIT = 1         # Points deducted per hit
+DAILY_BONUS_POINTS = 1   # Daily bonus points
+REFERRAL_POINTS = 5      # Referral bonus points
+PROTECTION_COST = 20     # Number protection cost (points)
+COOLDOWN_SECONDS = 60     # Cooldown time between bombing sessions (seconds)
 
 # ===================== MONGODB CONNECTION =====================
 memory_users = {}
