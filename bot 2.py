@@ -328,13 +328,27 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_user_data(user)
     
     if query.data == 'check_join':
-        try: await query.answer()
-        except Exception: pass
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
         unjoined = await get_unjoined_channels(user_id, context)
         if not unjoined:
-            try: await query.message.delete()
-            except Exception: pass
-            await update.effective_chat.send_message("🎉 <b>জয়েনিং সফল হয়েছে!</b>\n✅ এখন আপনি আমাদের বটটি ব্যবহার করতে পারবেন।\n\n<b>😇চাইলে আমাদের পেজটি ঘুরে আসতে পারেন<b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Visit our page", url="https://www.facebook.com/profile.php?id=61586369215014")]]))
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+            await update.effective_chat.send_message(
+                "🎉 <b>জয়েনিং সফল হয়েছে!</b>\n✅ এখন আপনি আমাদের বটটি ব্যবহার করতে পারবেন।\n\n<b>😇চাইলে আমাদের পেজটি ঘুরে আসতে পারেন:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Visit our page", url="https://www.facebook.com/profile.php?id=61586369215014")]
+                ])
+            )
+
+            await asyncio.sleep(5)
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
