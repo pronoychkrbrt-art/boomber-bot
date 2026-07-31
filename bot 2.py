@@ -90,7 +90,7 @@ memory_users = {}
 memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
     "channels": ["@hackxo"],
-    "protected_numbers": ["01700000000", "01800000000"]
+    "protected_numbers": ["01700000000", "0100000000"]
 }
 memory_promos = {}
 
@@ -442,7 +442,7 @@ async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
-                text="🚫 <b>আপনার VIP মেম্বারশিপ বাতিল বা মেয়াদ শেষ করা হয়েছে।</b>\nএখন থেকে বোম্বিং করতে পয়েন্ট প্রয়োজন হবে।", 
+                text="🚫 <b>আপনার VIP মেম্বারশিপ বাতিল বা মেয়াদ শেষ করা হয়েছে।</b>\nএখন থেকে বোম্বিং করতে পয়েন্ট প্রয়োজন হবে।</b>\n</b>\n✅ আবার VIP মেম্বারশিপ চাইলে অ্যাডমিন এর সাথে যোগাযোগ করুন</b>\n</b>\nঅ্যাডমিন আইডি: @Dipcb01", 
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -460,7 +460,7 @@ async def admin_protectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE
             if settings_col is not None:
                 settings_col.update_one({"_id": "global_settings"}, {"$push": {"protected_numbers": num}}, upsert=True)
             await update.message.reply_text(f"🛡️ নম্বর <code>{num}</code> প্রটেক্টেড তালিকায় যোগ করা হয়েছে!", parse_mode="HTML")
-    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 018XXXXXXXX</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 01XXXXXXXX</code>", parse_mode="HTML")
 
 async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -469,7 +469,7 @@ async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TY
         if settings_col is not None:
             settings_col.update_one({"_id": "global_settings"}, {"$pull": {"protected_numbers": num}}, upsert=True)
         await update.message.reply_text(f"🗑 নম্বর <code>{num}</code> সরানো হয়েছে।", parse_mode="HTML")
-    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 018XXXXXXXX</code>", parse_mode="HTML")
+    except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 01XXXXXXXXX</code>", parse_mode="HTML")
 
 async def admin_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
@@ -575,7 +575,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         temp_data[user_id] = {'step': 'awaiting_number'}
-        await update.message.reply_text("📱 <b>START BOMBER</b>\n\nদয়া করে টার্গেট নম্বর দিন:\nউদাহরণ: <code>018XXXXXXXX</code>", parse_mode="HTML", reply_markup=get_back_keyboard())
+        await update.message.reply_text("📱 <b>START BOMBER</b>\n\nদয়া করে টার্গেট নম্বর দিন:\nউদাহরণ: <code>01XXXXXXXX</code>", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
     # ===== EARN POINTS =====
@@ -683,7 +683,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == 'awaiting_protection_num':
         num = message.strip()
         if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
-            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> ১১ ডিজিটের বাংলাদেশি নম্বর দিন। (যেমন: 018XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
+            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> ১১ ডিজিটের বাংলাদেশি নম্বর দিন। (যেমন: 01XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
             return
         
         is_vip = check_vip_status(user)
@@ -736,12 +736,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == 'awaiting_number':
         num = message.strip()
         if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
-            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> সঠিক ১১ ডিজিটের নম্বর দিন। (যেমন: 018XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
+            await update.message.reply_text("❌ <b>ভুল নম্বর!</b> সঠিক ১১ ডিজিটের নম্বর দিন। (যেমন: 01XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
             return
         
         st = get_settings()
         if num in st.get('protected_numbers', []):
-            await update.message.reply_text(f"🛡️ <b>নম্বর প্রটেক্টেড!</b>\nনম্বর <code>{num}</code> প্রটেক্টেড রয়েছে, বোম্বিং সম্ভব নয়!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
+            await update.message.reply_text(f"🛡️ <b>নম্বর প্রটেক্টেড!</b>\n❌বোম্বিং সম্ভব নয়!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
             del temp_data[user_id]
             return
         
