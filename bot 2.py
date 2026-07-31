@@ -64,7 +64,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
-TOKEN = "8706041204:AAGJ_C6N-UmRzpLUWbV2sCKhSxfHKoWTYG8"
+TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 
