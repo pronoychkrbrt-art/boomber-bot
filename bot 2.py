@@ -70,6 +70,7 @@ logger = logging.getLogger(__name__)
 TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
+SECRET_CODE = "123456"  # 🔐 আপনার সিক্রেট কোড (প্রয়োজনে চেঞ্জ করুন)
 
 # 🌐 Vercel WebApp URL
 NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
@@ -90,7 +91,9 @@ memory_users = {}
 memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
     "channels": ["@hackxo"],
-    "protected_numbers": ["01700000000", "0100000000"]
+    "protected_numbers": ["01700000000", "0100000000"],
+    "co_admins": [],
+    "bot_file_url": "https://github.com/pronoychkrbrt-art/boomber-bot"
 }
 memory_promos = {}
 
@@ -210,7 +213,12 @@ def check_vip_status(tg_user):
 temp_data = {}
 
 # ===================== HELPERS =====================
-def is_admin(user_id): return user_id == ADMIN_ID
+def is_admin(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    st = get_settings()
+    co_admins = st.get('co_admins', [])
+    return user_id in co_admins
 
 async def get_unjoined_channels(user_id, context):
     st = get_settings()
@@ -352,6 +360,94 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
+
+# ===================== NEW CO-ADMIN & BOT FILE FEATURES =====================
+async def admin_addcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    st = get_settings()
+    
+    if len(context.args) < 2:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/addcoadmin SECRET_CODE CHAT_ID</code>", parse_mode="HTML")
+    
+    provided_code = context.args[0]
+    try:
+        target_id = int(context.args[1])
+    except ValueError:
+        return await update.message.reply_text("❌ অবৈধ Chat ID! সঠিক নম্বর দিন।", parse_mode="HTML")
+
+    if provided_code != SECRET_CODE and user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
+
+    if target_id == ADMIN_ID:
+        return await update.message.reply_text("⚠️ মেইন অ্যাডমিনকে কো-অ্যাডমিন করার প্রয়োজন নেই।", parse_mode="HTML")
+
+    if settings_col is not None:
+        settings_col.update_one({"_id": "global_settings"}, {"$addToSet": {"co_admins": target_id}}, upsert=True)
+
+    if "co_admins" not in memory_settings:
+        memory_settings["co_admins"] = []
+    if target_id not in memory_settings["co_admins"]:
+        memory_settings["co_admins"].append(target_id)
+
+    await update.message.reply_text(f"✅ ইউজার <code>{target_id}</code> সফলভাবে <b>Co-Admin</b> হিসেবে যুক্ত হয়েছে!", parse_mode="HTML")
+    try:
+        await context.bot.send_message(target_id, "🎉 আপনাকে এই বটের <b>Co-Admin</b> হিসেবে যুক্ত করা হয়েছে!", parse_mode="HTML")
+    except Exception: pass
+
+async def admin_rtcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন Co-Admin রিমুভ করতে পারবেন!", parse_mode="HTML")
+
+    if not context.args:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/rtcoadmin CHAT_ID</code>", parse_mode="HTML")
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        return await update.message.reply_text("❌ অবৈধ Chat ID!", parse_mode="HTML")
+
+    if target_id == ADMIN_ID:
+        return await update.message.reply_text("❌ মেইন অ্যাডমিনকে রিমুভ করা সম্ভব নয়!", parse_mode="HTML")
+
+    if settings_col is not None:
+        settings_col.update_one({"_id": "global_settings"}, {"$pull": {"co_admins": target_id}}, upsert=True)
+
+    if "co_admins" in memory_settings and target_id in memory_settings["co_admins"]:
+        memory_settings["co_admins"].remove(target_id)
+
+    await update.message.reply_text(f"🗑 ইউজার <code>{target_id}</code> সফলভাবে Co-Admin থেকে রিমুভ হয়েছে!", parse_mode="HTML")
+    try:
+        await context.bot.send_message(target_id, "🚫 আপনার <b>Co-Admin</b> সুবিধা বাতিল করা হয়েছে।", parse_mode="HTML")
+    except Exception: pass
+
+async def cmd_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/bot SECRET_CODE</code>", parse_mode="HTML")
+
+    provided_code = context.args[0]
+    if provided_code != SECRET_CODE and update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
+
+    st = get_settings()
+    bot_url = st.get("bot_file_url", "https://github.com/pronoychkrbrt-art/boomber-bot")
+    await update.message.reply_text(
+        f"🤖 <b>বট ফাইল এক্সেস লিংক:</b>\n\n🔗 <code>{bot_url}</code>",
+        parse_mode="HTML"
+    )
+
+async def cmd_nbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/nbot SECRET_CODE NEW_URL</code>", parse_mode="HTML")
+
+    provided_code = context.args[0]
+    new_url = context.args[1]
+
+    if provided_code != SECRET_CODE and update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
+
+    update_settings({"bot_file_url": new_url})
+    await update.message.reply_text(f"✅ <b>বট ফাইল লিংক আপডেট করা হয়েছে!</b>\n\n🔗 <code>{new_url}</code>", parse_mode="HTML")
 
 # ===================== ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -553,7 +649,12 @@ async def admin_panel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>/addchannel @ch</code> - চ্যানেল যোগ\n"
         "<code>/removechannel @ch</code> - চ্যানেল বাতিল\n"
         "<code>/setapi URL</code> - API চেঞ্জ\n"
-        "<code>/botstats</code> - ওভারঅল স্ট্যাটস",
+        "<code>/botstats</code> - ওভারঅল স্ট্যাটস\n\n"
+        "👑 <b>ADVANCED ADMIN COMMANDS:</b>\n"
+        "<code>/addcoadmin CODE ID</code> - Co-Admin যোগ\n"
+        "<code>/rtcoadmin ID</code> - Co-Admin বাতিল\n"
+        "<code>/bot CODE</code> - বট ফাইল লিংক\n"
+        "<code>/nbot CODE URL</code> - নতুন বট ফাইল লিংক সেট",
         parse_mode="HTML"
     )
 
@@ -919,12 +1020,18 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
+    # 🌟 NEW COMMAND HANDLERS
+    application.add_handler(CommandHandler("addcoadmin", admin_addcoadmin))
+    application.add_handler(CommandHandler("rtcoadmin", admin_rtcoadmin))
+    application.add_handler(CommandHandler("bot", cmd_bot))
+    application.add_handler(CommandHandler("nbot", cmd_nbot))
+    
     # 🎯 Message & Callback Handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH VISUAL CUMULATIVE COUNTING!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ADVANCED CO-ADMIN FEATURES!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
