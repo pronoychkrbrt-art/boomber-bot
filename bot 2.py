@@ -30,7 +30,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
-TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
+TOKEN = "8879095437:AAEmzxYQpQ3NobCjrGS75xjIzYhm2qhxs-8"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 SECRET_CODE = "123456"
@@ -1061,7 +1061,7 @@ def main():
     print("="*50)
     print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ADVANCED CO-ADMIN FEATURES!")
     print("="*50)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
