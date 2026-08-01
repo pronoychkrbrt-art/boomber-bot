@@ -5,7 +5,7 @@ import asyncio
 import time
 import logging
 from threading import Thread
-from flask import Flask
+from flask import Flask, request, jsonify
 
 # 💥 Auto-install missing packages
 needed_packages = ["pymongo", "dnspython", "requests", "python-telegram-bot", "certifi", "flask"]
@@ -29,10 +29,24 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
-# 🌐 Render Free Web Service Keep-Alive Server
-# ===================== FLASK & API SERVER (CORS FIXED) =====================
-flask_app = Flask('')
+# ===================== CONFIGURATION =====================
+TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
+ADMIN_ID = 7033711819
+OWNER_USERNAME = "@Dipcb01"
+SECRET_CODE = "123456"
 
+NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
+MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
+
+INITIAL_POINTS = 2
+POINT_PER_HIT = 1
+DAILY_BONUS_POINTS = 1
+REFERRAL_POINTS = 5
+PROTECTION_COST = 20
+COOLDOWN_SECONDS = 60
+
+# 🌐 Render Free Web Service Keep-Alive Server
+flask_app = Flask('')
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://boomber-bot.onrender.com/")
 
 @flask_app.route('/')
@@ -107,10 +121,9 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
-# 🔄 Self-Ping Background Thread (Render Sleep Preventer)
 def self_ping():
     while True:
-        time.sleep(240)  # 4 mins
+        time.sleep(240)
         try:
             requests.get(RENDER_URL, timeout=10)
             print("🔄 Render Keep-Alive Self-Ping Successful!")
@@ -127,28 +140,9 @@ def keep_alive():
     t2.start()
 
 keep_alive()
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ===================== CONFIGURATION =====================
-TOKEN = "8879095437:AAFY5EDqysZyv5Drc13regpL5NhXnOWrRok"
-ADMIN_ID = 7033711819
-OWNER_USERNAME = "@Dipcb01"
-SECRET_CODE = "123456"  # 🔐 আপনার সিক্রেট কোড (প্রয়োজনে চেঞ্জ করুন)
-
-# 🌐 Vercel WebApp URL
-NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
-
-# 🍃 MongoDB Atlas Connection String
-MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
-
-# 🎯 Points & Fee Settings
-INITIAL_POINTS = 2       # Initial points for new users
-POINT_PER_HIT = 1         # Points deducted per hit
-DAILY_BONUS_POINTS = 1   # Daily bonus points
-REFERRAL_POINTS = 5      # Referral bonus points
-PROTECTION_COST = 20     # Number protection cost (points)
-COOLDOWN_SECONDS = 60     # Cooldown time between bombing sessions (seconds)
 
 # ===================== MONGODB CONNECTION =====================
 memory_users = {}
@@ -185,7 +179,6 @@ try:
 except Exception as e:
     print(f"⚠️ MongoDB Atlas Warning: {e}. Fallback to Memory.")
 
-# ===================== DATABASE HELPER FUNCTIONS =====================
 def get_settings():
     try:
         if settings_col is not None:
@@ -276,7 +269,6 @@ def check_vip_status(tg_user):
 
 temp_data = {}
 
-# ===================== HELPERS =====================
 def is_admin(user_id):
     if user_id == ADMIN_ID:
         return True
@@ -296,7 +288,6 @@ async def get_unjoined_channels(user_id, context):
             unjoined.append(ch)
     return unjoined
 
-# ===================== KEYBOARDS =====================
 def get_main_keyboard(user_id):
     keyboard = [
         ["🚀 START BOMBER"],
@@ -310,7 +301,6 @@ def get_main_keyboard(user_id):
 
 def get_back_keyboard(): return ReplyKeyboardMarkup([["🔙 ব্যাক"]], resize_keyboard=True)
 
-# ===================== MAIN MENU =====================
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
@@ -351,15 +341,17 @@ async def send_join_prompt(update: Update, unjoined_channels, is_error=False):
         except Exception:
             await update.callback_query.message.reply_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ===================== START & AUTO CLAIM (+20 PTS) =====================
+# ===================== START & DYNAMIC CLAIM HANDLER =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
     u = get_user_data(user)
     
-    # 🎯 MONETAG MINI APP REWARD CLAIM HANDLER
-    if context.args and context.args[0].lower() == 'claim20pts':
-        pts = 20
+    # 🎯 MONETAG MINI APP REWARD CLAIM HANDLER (DYNAMIC claim1pts / claim20pts)
+    if context.args and context.args[0].lower().startswith('claim'):
+        arg = context.args[0].lower().replace('claim', '').replace('pts', '')
+        pts = int(arg) if arg.isdigit() else 1
+        
         if users_col is not None:
             users_col.update_one({"user_id": user.id}, {"$inc": {"points": pts}}, upsert=True)
             
@@ -428,7 +420,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== NEW CO-ADMIN & BOT FILE FEATURES =====================
 async def admin_addcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    st = get_settings()
     
     if len(context.args) < 2:
         return await update.message.reply_text("❌ ব্যবহার: <code>/addcoadmin SECRET_CODE CHAT_ID</code>", parse_mode="HTML")
@@ -616,7 +607,7 @@ async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
-                text="🚫 <b>আপনার VIP মেম্বারশিপ বাতিল বা মেয়াদ শেষ করা হয়েছে।</b>\nএখন থেকে বোম্বিং করতে পয়েন্ট প্রয়োজন হবে।</b>\n</b>\n✅ আবার VIP মেম্বারশিপ চাইলে অ্যাডমিন এর সাথে যোগাযোগ করুন</b>\n</b>\nঅ্যাডমিন আইডি: @Dipcb01", 
+                text="🚫 <b>আপনার VIP মেম্বারশিপ বাতিল বা মেয়াদ শেষ করা হয়েছে।</b>\nএখন থেকে বোম্বিং করতে পয়েন্ট প্রয়োজন হবে।\n\n✅ আবার VIP মেম্বারশিপ চাইলে অ্যাডমিন এর সাথে যোগাযোগ করুন\n\nঅ্যাডমিন আইডি: @Dipcb01", 
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -737,7 +728,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_join_prompt(update, unjoined)
         return
     
-    # ===== START BOMBER =====
     if message == "🚀 START BOMBER":
         is_vip = check_vip_status(user)
         
@@ -757,7 +747,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📱 <b>START BOMBER</b>\n\nদয়া করে টার্গেট নম্বর দিন:\nউদাহরণ: <code>01XXXXXXXX</code>", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== EARN POINTS =====
     elif message == "💰 EARN POINTS":
         is_vip = check_vip_status(user)
         keyboard = [[InlineKeyboardButton("⚡ WATCH ADS & EARN POINTS ⚡", web_app=WebAppInfo(url=NETLIFY_MINI_APP_URL))]]
@@ -765,7 +754,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎁 <b>EARN FREE POINTS</b> 🎁\n\n🔰 {status_text}\n\n▶ 'WATCH ADS' চেপে এড দেখে ফ্রি পয়েন্ট ক্লেইম করুন!", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # ===== REFER & EARN =====
     elif message == "👥 REFER & EARN":
         ref_link = f"https://t.me/{context.bot.username}?start={user_id}"
         await update.message.reply_text(
@@ -774,7 +762,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== LEADERBOARD =====
     elif message == "🏆 LEADERBOARD":
         sorted_users = []
         if users_col is not None:
@@ -789,7 +776,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
-    # ===== DAILY BONUS =====
     elif message == "🎁 DAILY BONUS":
         last_daily = u.get('last_daily')
         if isinstance(last_daily, str): last_daily = datetime.fromisoformat(last_daily)
@@ -806,19 +792,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"🎉 <b>ডেইলি বোনাস সফল!</b>\n➕ পেয়েছেন: <b>+{DAILY_BONUS_POINTS} Points</b>\n💰 নতুন ব্যালেন্স: <b>{u.get('points', 0)} Points</b>", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
-    # ===== NUMBER PROTECTION =====
     elif message == "🛡️ PROTECT NUMBER":
         temp_data[user_id] = {'step': 'awaiting_protection_num'}
         await update.message.reply_text(f"🛡️ <b>NUMBER PROTECTION</b> 🛡️\n\nনম্বর প্রটেক্ট করতে ফি: <b>{PROTECTION_COST} Points</b>\n\nআপনার ১১ ডিজিটের নম্বর লিখুন:", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== REDEEM CODE =====
     elif message == "🎟 REDEEM CODE":
         temp_data[user_id] = {'step': 'awaiting_code'}
         await update.message.reply_text("🎟 <b>REDEEM CODE</b>\n\nআপনার প্রাপ্ত কোডটি লিখুন:", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== MY INFO =====
     elif message == "📊 MY INFO":
         is_vip = check_vip_status(user)
         vip_text = "👑 <b>VIP MEMBER</b>" if is_vip else "👤 <b>FREE USER</b>"
@@ -837,17 +820,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
-    # ===== CONTACT ADMIN =====
     elif message == "📞 CONTACT ADMIN":
         await update.message.reply_text(f"📞 <b>কন্ট্যাক্ট অ্যাডমিন</b>\n\n👨‍💻 অ্যাডমিন: {OWNER_USERNAME}\n🔗 কন্ট্যাক্ট: https://t.me/{OWNER_USERNAME.replace('@', '')}", reply_markup=get_main_keyboard(user_id))
         return
 
-    # ===== ADMIN PANEL BUTTON =====
     elif message == "⚙️ ADMIN PANEL" and is_admin(user_id):
         await admin_panel_menu(update, context)
         return
 
-    # ===== BACK BUTTON =====
     elif message == "🔙 ব্যাক":
         await main_menu(update, context)
         return
@@ -858,7 +838,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = temp_data[user_id].get('step')
 
-    # ===== PROTECTION PROCESS =====
     if step == 'awaiting_protection_num':
         num = message.strip()
         if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
@@ -884,7 +863,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del temp_data[user_id]
         return
 
-    # ===== REDEEM CODE PROCESS =====
     if step == 'awaiting_code':
         code = message.strip().upper()
         p_data = None
@@ -911,7 +889,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del temp_data[user_id]
         return
 
-    # ===== NUMBER INPUT =====
     if step == 'awaiting_number':
         num = message.strip()
         if not num.isdigit() or len(num) != 11 or not num.startswith("01"):
@@ -931,7 +908,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
-    # ===== BOMBING LOOP (API রেসপন্স পাওয়ার সাথে সাথে পরবর্তী হিট প্রসেস করার লজিক) =====
     elif step == 'awaiting_amount':
         try:
             amount = int(message)
@@ -948,7 +924,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             number = temp_data[user_id]['number']
             
-            # Initial Points Deduction
             if not is_vip:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
@@ -956,7 +931,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if users_col is not None:
                 users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
             
-            # Initial Loading Message
             msg = await update.message.reply_text(
                 f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
                 f"📱 টার্গেট: <code>{number}</code>\n"
@@ -974,7 +948,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i in range(amount):
                 try:
-                    # 💥 এপিআই থেকে উত্তর না আসা পর্যন্ত কোড অপেক্ষা করবে (Timeout 30s)
                     api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
                     
                     if api_response.status_code == 200:
@@ -1000,12 +973,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_failed_count += 1
                     print(f"Error occurred during hit {i+1}: {e}")
                 
-                # Visual Progress Loading Bar Calculation
                 percent = int(((i + 1) / amount) * 100)
                 filled = int(10 * (i + 1) // amount)
                 bar = '▰' * filled + '▱' * (10 - filled)
                 
-                # Live visual progress & cumulative count update
                 try:
                     await msg.edit_text(
                         f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
@@ -1018,9 +989,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-                # ⚡ কোনো কৃত্রিম sleep() নেই, এপিআই উত্তর পাওয়ার সাথে সাথেই পরবর্তী হিট চালু হবে।
-
-            # Final Calculations & Database Sync
             total_requests = total_sent_count + total_failed_count
             
             if users_col is not None:
@@ -1043,7 +1011,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
             balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
             
-            # 🎯 Final Cumulative Result Message
             result_message = (
                 f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
                 f"📱 টার্গেট: <code>{number}</code>\n"
@@ -1069,7 +1036,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # 🎯 Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("users", admin_users))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -1084,13 +1050,11 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
-    # 🌟 NEW COMMAND HANDLERS
     application.add_handler(CommandHandler("addcoadmin", admin_addcoadmin))
     application.add_handler(CommandHandler("rtcoadmin", admin_rtcoadmin))
     application.add_handler(CommandHandler("bot", cmd_bot))
     application.add_handler(CommandHandler("nbot", cmd_nbot))
     
-    # 🎯 Message & Callback Handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
