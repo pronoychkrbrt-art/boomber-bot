@@ -30,6 +30,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # 🌐 Render Free Web Service Keep-Alive Server
+# ===================== FLASK & API SERVER (CORS FIXED) =====================
 flask_app = Flask('')
 
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://boomber-bot.onrender.com/")
@@ -38,6 +39,70 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://boomber-bot.onrender
 def home():
     return "🤖 SMS Bomber Bot is Running 24/7 Alive!"
 
+# 🎯 MINI APP REWARD API ENDPOINT (CORS FIXED)
+@flask_app.route('/api/claim-reward', methods=['POST', 'OPTIONS'])
+def claim_reward_api():
+    # CORS Preflight Check Handle
+    if request.method == 'OPTIONS':
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+        return response, 200
+
+    try:
+        data = request.get_json(force=True)
+        raw_user_id = data.get('user_id')
+        pts = int(data.get('pts', 1))
+
+        try:
+            user_id = int(raw_user_id)
+        except (ValueError, TypeError):
+            user_id = None
+
+        if not user_id:
+            response = jsonify({"status": "error", "message": "Invalid User ID"})
+            response.headers.add("Access-Control-Allow-Origin", "*")
+            return response, 400
+
+        # 1. Update MongoDB or Memory Database
+        current_points = 0
+        if users_col is not None:
+            users_col.update_one({"user_id": user_id}, {"$inc": {"points": pts}}, upsert=True)
+            u = users_col.find_one({"user_id": user_id})
+            current_points = u.get("points", pts) if u else pts
+        else:
+            if user_id not in memory_users:
+                memory_users[user_id] = {"user_id": user_id, "points": INITIAL_POINTS}
+            memory_users[user_id]["points"] = memory_users[user_id].get("points", 0) + pts
+            current_points = memory_users[user_id]["points"]
+
+        # 2. Send Telegram Notification Message directly via Bot API
+        msg_text = (
+            f"🎉 <b>এড দেখা সফল হয়েছে!</b>\n\n"
+            f"➕ আপনার অ্যাকাউন্টে <b>+{pts} Points</b> যোগ করা হয়েছে!\n"
+            f"💰 বর্তমান ব্যালেন্স: <b>{current_points} Points</b>"
+        )
+        
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            json={
+                "chat_id": user_id,
+                "text": msg_text,
+                "parse_mode": "HTML"
+            },
+            timeout=5
+        )
+
+        response = jsonify({"status": "success", "new_points": current_points})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 200
+    except Exception as e:
+        print(f"API Reward Error: {e}")
+        response = jsonify({"status": "error", "message": str(e)})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 500
+
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host='0.0.0.0', port=port)
@@ -45,7 +110,7 @@ def run_flask():
 # 🔄 Self-Ping Background Thread (Render Sleep Preventer)
 def self_ping():
     while True:
-        time.sleep(240) # 4 mins
+        time.sleep(240)  # 4 mins
         try:
             requests.get(RENDER_URL, timeout=10)
             print("🔄 Render Keep-Alive Self-Ping Successful!")
@@ -62,7 +127,6 @@ def keep_alive():
     t2.start()
 
 keep_alive()
-
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
