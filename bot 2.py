@@ -33,7 +33,7 @@ from pymongo.server_api import ServerApi
 TOKEN = "8879095437:AAEmzxYQpQ3NobCjrGS75xjIzYhm2qhxs-8"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
-SECRET_CODE = "123456"
+DEFAULT_SECRET_CODE = "123456"
 
 NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
 MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
@@ -56,7 +56,6 @@ def home():
 # 🎯 MINI APP REWARD API ENDPOINT (CORS FIXED)
 @flask_app.route('/api/claim-reward', methods=['POST', 'OPTIONS'])
 def claim_reward_api():
-    # CORS Preflight Check Handle
     if request.method == 'OPTIONS':
         response = jsonify({"status": "ok"})
         response.headers.add("Access-Control-Allow-Origin", "*")
@@ -79,7 +78,6 @@ def claim_reward_api():
             response.headers.add("Access-Control-Allow-Origin", "*")
             return response, 400
 
-        # 1. Update MongoDB or Memory Database
         current_points = 0
         if users_col is not None:
             users_col.update_one({"user_id": user_id}, {"$inc": {"points": pts}}, upsert=True)
@@ -91,7 +89,6 @@ def claim_reward_api():
             memory_users[user_id]["points"] = memory_users[user_id].get("points", 0) + pts
             current_points = memory_users[user_id]["points"]
 
-        # 2. Send Telegram Notification Message directly via Bot API
         msg_text = (
             f"🎉 <b>এড দেখা সফল হয়েছে!</b>\n\n"
             f"➕ আপনার অ্যাকাউন্টে <b>+{pts} Points</b> যোগ করা হয়েছে!\n"
@@ -149,16 +146,18 @@ memory_users = {}
 memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
     "channels": ["@hackxo"],
-    "protected_numbers": ["01700000000", "0100000000"],
     "co_admins": [],
+    "secret_code": DEFAULT_SECRET_CODE,
     "bot_file_url": "https://github.com/pronoychkrbrt-art/boomber-bot"
 }
 memory_promos = {}
+memory_protected = set(["01700000000", "0100000000"])
 
 db = None
 users_col = None
 settings_col = None
 promos_col = None
+protected_col = None  # 📁 Dedicated Collection for Protected Numbers
 
 try:
     mongo_client = MongoClient(
@@ -172,6 +171,7 @@ try:
     users_col = db.get_collection("users")
     settings_col = db.get_collection("settings")
     promos_col = db.get_collection("promos")
+    protected_col = db.get_collection("protected_numbers")  # Separate Collection
     mongo_client.admin.command('ping')
     print("==================================================")
     print("🍃 MongoDB Atlas Connected Successfully!")
@@ -192,6 +192,10 @@ def get_settings():
         print(f"Error getting settings: {e}")
     return memory_settings
 
+def get_secret_code():
+    st = get_settings()
+    return st.get("secret_code", DEFAULT_SECRET_CODE)
+
 def update_settings(fields):
     memory_settings.update(fields)
     try:
@@ -199,6 +203,11 @@ def update_settings(fields):
             settings_col.update_one({"_id": "global_settings"}, {"$set": fields}, upsert=True)
     except Exception as e:
         print(f"Error updating settings: {e}")
+
+def is_number_protected(number):
+    if protected_col is not None:
+        return protected_col.find_one({"number": number}) is not None
+    return number in memory_protected
 
 def get_user_data(tg_user):
     if not tg_user: return None
@@ -276,6 +285,16 @@ def is_admin(user_id):
     co_admins = st.get('co_admins', [])
     return user_id in co_admins
 
+def get_user_role(user_id, tg_user=None):
+    if user_id == ADMIN_ID:
+        return "👑 <b>MAIN ADMIN</b>"
+    st = get_settings()
+    if user_id in st.get('co_admins', []):
+        return "🛠️ <b>CO-ADMIN</b>"
+    if tg_user and check_vip_status(tg_user):
+        return "💎 <b>VIP MEMBER</b>"
+    return "👤 <b>GENERAL USER</b>"
+
 async def get_unjoined_channels(user_id, context):
     st = get_settings()
     unjoined = []
@@ -308,14 +327,14 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user.id in temp_data: del temp_data[user.id]
     
-    is_vip = check_vip_status(user)
-    status_badge = "👑 VIP MEMBER" if is_vip else f"💰 {u.get('points', INITIAL_POINTS)} Points"
+    role_text = get_user_role(user.id, user)
+    status_badge = role_text if ("ADMIN" in role_text or "VIP" in role_text) else f"💰 {u.get('points', INITIAL_POINTS)} Points"
     
     await update.message.reply_text(
         f"🔥 <b>WELCOME TO SMS BOMBER BOT</b> 🔥\n\n"
         f"👤 <b>ইউজার:</b> {u.get('first_name', user.first_name)}\n"
         f"🆔 <b>আইডি:</b> <code>{user.id}</code>\n"
-        f"🔰 <b>স্ট্যাটাস:</b> <b>{status_badge}</b>\n\n"
+        f"🔰 <b>স্ট্যাটাস:</b> {status_badge}\n\n"
         f"📌 <i>নিচের বাটন থেকে আপনার কাঙ্ক্ষিত অপশন সিলেক্ট করুন:</i>",
         parse_mode="HTML", reply_markup=get_main_keyboard(user.id)
     )
@@ -347,7 +366,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user: return
     u = get_user_data(user)
     
-    # 🎯 MONETAG MINI APP REWARD CLAIM HANDLER (DYNAMIC claim1pts / claim20pts)
     if context.args and context.args[0].lower().startswith('claim'):
         arg = context.args[0].lower().replace('claim', '').replace('pts', '')
         pts = int(arg) if arg.isdigit() else 1
@@ -417,9 +435,129 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-# ===================== NEW CO-ADMIN & BOT FILE FEATURES =====================
+# ===================== NEW EXCLUSIVE MAIN ADMIN COMMANDS =====================
+
+# 1️⃣ SHOW ALL PROTECTED NUMBERS (MAIN ADMIN ONLY)
+async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
+
+    p_nums = []
+    if protected_col is not None:
+        p_nums = [doc['number'] for doc in protected_col.find()]
+    else:
+        p_nums = list(memory_protected)
+
+    if not p_nums:
+        text = "🛡️ <b>প্রটেক্টেড নম্বর লিস্ট:</b>\n\n<i>কোনো নম্বর প্রটেক্টেড নেই।</i>"
+    else:
+        text = f"🛡️ <b>প্রটেক্টেড নম্বর লিস্ট ({len(p_nums)}টি):</b>\n\n"
+        for num in p_nums:
+            text += f"• <code>{num}</code>\n"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+# 2️⃣ SHOW ALL CO-ADMINS WITH CHAT ID (MAIN ADMIN ONLY)
+async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
+
+    st = get_settings()
+    co_admins = st.get('co_admins', [])
+
+    if not co_admins:
+        text = "🛠️ <b>কো-অ্যাডমিন লিস্ট:</b>\n\n<i>কোনো কো-অ্যাডমিন যুক্ত নেই।</i>"
+    else:
+        text = f"🛠️ <b>কো-অ্যাডমিন লিস্ট ({len(co_admins)}জন):</b>\n\n"
+        for ca_id in co_admins:
+            u_info = users_col.find_one({"user_id": ca_id}) if users_col is not None else memory_users.get(ca_id)
+            username = u_info.get("username", "N/A") if u_info else "N/A"
+            name = u_info.get("first_name", "User") if u_info else "User"
+            text += f"• <code>{ca_id}</code> | {name} (@{username})\n"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+# 3️⃣ SHOW ALL VIP USERS (MAIN ADMIN ONLY)
+async def admin_showvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
+
+    vips = []
+    if users_col is not None:
+        vips = list(users_col.find({"is_vip": True}))
+    else:
+        vips = [u for u in memory_users.values() if u.get("is_vip")]
+
+    if not vips:
+        text = "💎 <b>VIP ইউজার লিস্ট:</b>\n\n<i>কোনো VIP ইউজার পাওয়া যায়নি।</i>"
+    else:
+        text = f"💎 <b>VIP ইউজার লিস্ট ({len(vips)}জন):</b>\n\n"
+        for v in vips:
+            exp = v.get("vip_expiry", "N/A")
+            if isinstance(exp, datetime):
+                exp = exp.strftime("%Y-%m-%d %H:%M")
+            text += f"• <code>{v.get('user_id')}</code> | {v.get('first_name', 'User')} (@{v.get('username', 'N/A')})\n  ⏳ মেয়াদ: {exp}\n\n"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+# 4️⃣ CHANGE SECRET CODE (MAIN ADMIN ONLY)
+async def admin_chn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন সিক্রেট কোড পরিবর্তন করতে পারবেন!", parse_mode="HTML")
+
+    if len(context.args) < 2:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/chn বর্তমান_কোড নতুন_কোড</code>", parse_mode="HTML")
+
+    old_code, new_code = context.args[0], context.args[1]
+    current_secret = get_secret_code()
+
+    if old_code != current_secret:
+        return await update.message.reply_text("❌ বর্তমান সিক্রেট কোডটি ভুল!", parse_mode="HTML")
+
+    update_settings({"secret_code": new_code})
+    await update.message.reply_text(f"🔑 <b>সিক্রেট কোড সফলভাবে পরিবর্তন হয়েছে!</b>\n\nনতুন কোড: <code>{new_code}</code>", parse_mode="HTML")
+
+# 5️⃣ CUT COINS / POINTS FROM USER (MAIN ADMIN ONLY)
+async def admin_cutcoin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
+
+    if len(context.args) < 2:
+        return await update.message.reply_text("❌ ব্যবহার: <code>/cutcoin USER_ID AMOUNT</code>", parse_mode="HTML")
+
+    try:
+        target_id = int(context.args[0])
+        amount = int(context.args[1])
+
+        if amount <= 0:
+            return await update.message.reply_text("❌ পয়েন্ট সংখ্যা ধনাত্মক হতে হবে!", parse_mode="HTML")
+
+        if users_col is not None:
+            users_col.update_one({"user_id": target_id}, {"$inc": {"points": -amount}}, upsert=True)
+
+        if target_id in memory_users:
+            memory_users[target_id]["points"] = max(0, memory_users[target_id].get("points", 0) - amount)
+
+        await update.message.reply_text(f"📉 ইউজার <code>{target_id}</code> এর অ্যাকাউন্ট থেকে <b>-{amount} Points</b> কেটে নেওয়া হয়েছে!", parse_mode="HTML")
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=f"⚠️ <b>পয়েন্ট কর্তন করা হয়েছে!</b>\n\nঅ্যাডমিন আপনার অ্যাকাউন্ট থেকে <b>-{amount} Points</b> কেটে নিয়েছেন।",
+                parse_mode="HTML"
+            )
+        except Exception: pass
+    except ValueError:
+        await update.message.reply_text("❌ ইউজার আইডি এবং পয়েন্ট সংখ্যা সঠিক দিন!", parse_mode="HTML")
+
+# ===================== CO-ADMIN & BOT FILE FEATURES =====================
 async def admin_addcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    current_secret = get_secret_code()
     
     if len(context.args) < 2:
         return await update.message.reply_text("❌ ব্যবহার: <code>/addcoadmin SECRET_CODE CHAT_ID</code>", parse_mode="HTML")
@@ -430,7 +568,7 @@ async def admin_addcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         return await update.message.reply_text("❌ অবৈধ Chat ID! সঠিক নম্বর দিন।", parse_mode="HTML")
 
-    if provided_code != SECRET_CODE and user_id != ADMIN_ID:
+    if provided_code != current_secret and user_id != ADMIN_ID:
         return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
 
     if target_id == ADMIN_ID:
@@ -477,11 +615,12 @@ async def admin_rtcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: pass
 
 async def cmd_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current_secret = get_secret_code()
     if not context.args:
         return await update.message.reply_text("❌ ব্যবহার: <code>/bot SECRET_CODE</code>", parse_mode="HTML")
 
     provided_code = context.args[0]
-    if provided_code != SECRET_CODE and update.effective_user.id != ADMIN_ID:
+    if provided_code != current_secret and update.effective_user.id != ADMIN_ID:
         return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
 
     st = get_settings()
@@ -492,19 +631,20 @@ async def cmd_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_nbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current_secret = get_secret_code()
     if len(context.args) < 2:
         return await update.message.reply_text("❌ ব্যবহার: <code>/nbot SECRET_CODE NEW_URL</code>", parse_mode="HTML")
 
     provided_code = context.args[0]
     new_url = context.args[1]
 
-    if provided_code != SECRET_CODE and update.effective_user.id != ADMIN_ID:
+    if provided_code != current_secret and update.effective_user.id != ADMIN_ID:
         return await update.message.reply_text("❌ ভুল গোপন কোড (Secret Code)!", parse_mode="HTML")
 
     update_settings({"bot_file_url": new_url})
     await update.message.reply_text(f"✅ <b>বট ফাইল লিংক আপডেট করা হয়েছে!</b>\n\n🔗 <code>{new_url}</code>", parse_mode="HTML")
 
-# ===================== ADMIN COMMANDS =====================
+# ===================== COMMON ADMIN COMMANDS =====================
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     
@@ -620,19 +760,21 @@ async def admin_protectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         num = context.args[0].strip()
-        st = get_settings()
-        if num not in st.get('protected_numbers', []):
-            if settings_col is not None:
-                settings_col.update_one({"_id": "global_settings"}, {"$push": {"protected_numbers": num}}, upsert=True)
-            await update.message.reply_text(f"🛡️ নম্বর <code>{num}</code> প্রটেক্টেড তালিকায় যোগ করা হয়েছে!", parse_mode="HTML")
+        if protected_col is not None:
+            protected_col.update_one({"number": num}, {"$set": {"number": num, "added_by": update.effective_user.id, "added_at": datetime.now()}}, upsert=True)
+        else:
+            memory_protected.add(num)
+        await update.message.reply_text(f"🛡️ নম্বর <code>{num}</code> প্রটেক্টেড তালিকায় যোগ করা হয়েছে!", parse_mode="HTML")
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 01XXXXXXXX</code>", parse_mode="HTML")
 
 async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         num = context.args[0].strip()
-        if settings_col is not None:
-            settings_col.update_one({"_id": "global_settings"}, {"$pull": {"protected_numbers": num}}, upsert=True)
+        if protected_col is not None:
+            protected_col.delete_one({"number": num})
+        if num in memory_protected:
+            memory_protected.remove(num)
         await update.message.reply_text(f"🗑 নম্বর <code>{num}</code> সরানো হয়েছে।", parse_mode="HTML")
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 01XXXXXXXXX</code>", parse_mode="HTML")
 
@@ -666,13 +808,18 @@ async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         st = get_settings()
-        total_u, vips, total_pts = 0, 0, 0
+        total_u, vips, total_pts, total_protected = 0, 0, 0, 0
         
         if users_col is not None:
             total_u = users_col.count_documents({})
             vips = users_col.count_documents({"is_vip": True})
             res = list(users_col.aggregate([{"$group": {"_id": None, "total": {"$sum": "$points"}}}]))
             if res: total_pts = res[0]["total"]
+            
+        if protected_col is not None:
+            total_protected = protected_col.count_documents({})
+        else:
+            total_protected = len(memory_protected)
             
         channels_str = ", ".join(st.get('channels', [])) if st.get('channels') else 'None'
         
@@ -681,7 +828,7 @@ async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 মোট ইউজার: <b>{total_u}</b>\n"
             f"👑 VIP ইউজার: <b>{vips}</b>\n"
             f"💰 মোট পয়েন্ট: <b>{total_pts}</b>\n"
-            f"🛡️ প্রটেক্টেড নম্বর: <b>{len(st.get('protected_numbers', []))}টি</b>\n"
+            f"🛡️ প্রটেক্টেড নম্বর: <b>{total_protected}টি</b>\n"
             f"📢 চ্যানেল: {channels_str}\n"
             f"🌐 বর্তমান API: <code>{st.get('api_url', 'Default')}</code>",
             parse_mode="HTML"
@@ -690,8 +837,10 @@ async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ এরর: <code>{e}</code>", parse_mode="HTML")
 
 async def admin_panel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_admin(update.effective_user.id): return
-    await update.message.reply_text(
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    
+    panel_text = (
         "⚙️ <b>ADMIN CONTROL PANEL</b> ⚙️\n\n"
         "<code>/users</code> - ইউজার লিস্ট\n"
         "<code>/broadcast &lt;msg&gt;</code> - ব্রডকাস্ট\n"
@@ -705,13 +854,24 @@ async def admin_panel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>/removechannel @ch</code> - চ্যানেল বাতিল\n"
         "<code>/setapi URL</code> - API চেঞ্জ\n"
         "<code>/botstats</code> - ওভারঅল স্ট্যাটস\n\n"
-        "👑 <b>ADVANCED ADMIN COMMANDS:</b>\n"
+        "👑 <b>ADVANCED COMMANDS:</b>\n"
         "<code>/addcoadmin CODE ID</code> - Co-Admin যোগ\n"
-        "<code>/rtcoadmin ID</code> - Co-Admin বাতিল\n"
         "<code>/bot CODE</code> - বট ফাইল লিংক\n"
-        "<code>/nbot CODE URL</code> - নতুন বট ফাইল লিংক সেট",
-        parse_mode="HTML"
+        "<code>/nbot CODE URL</code> - নতুন বট ফাইল লিংক সেট\n"
     )
+
+    if user_id == ADMIN_ID:
+        panel_text += (
+            "\n🔒 <b>MAIN ADMIN ONLY COMMANDS:</b>\n"
+            "<code>/showpn</code> - প্রটেক্টেড নম্বর লিস্ট\n"
+            "<code>/showcoadmin</code> - কো-অ্যাডমিন লিস্ট\n"
+            "<code>/showvip</code> - VIP ইউজার লিস্ট\n"
+            "<code>/chn OLD_CODE NEW_CODE</code> - সিক্রেট কোড পরিবর্তন\n"
+            "<code>/cutcoin ID AMOUNT</code> - পয়েন্ট কেটে নেওয়া\n"
+            "<code>/rtcoadmin ID</code> - Co-Admin বাতিল\n"
+        )
+
+    await update.message.reply_text(panel_text, parse_mode="HTML")
 
 # ===================== MESSAGE HANDLERS =====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -803,14 +963,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif message == "📊 MY INFO":
-        is_vip = check_vip_status(user)
-        vip_text = "👑 <b>VIP MEMBER</b>" if is_vip else "👤 <b>FREE USER</b>"
+        role_badge = get_user_role(user_id, user)
         info_text = (
             f"📊 <b>আমার প্রোফাইল</b> 📊\n\n"
             f"🆔 আইডি: <code>{user.id}</code>\n"
             f"👤 নাম: <b>{u.get('first_name', user.first_name)}</b>\n"
             f"🔗 ইউজারনেম: @{u.get('username', 'N/A')}\n"
-            f"🔰 মেম্বারশিপ: {vip_text}\n"
+            f"🔰 মেম্বারশিপ: {role_badge}\n"
             f"💰 পয়েন্ট: <b>{u.get('points',0)} Points</b>\n\n"
             f"👥 রেফার: <b>{u.get('referral_count',0)} জন</b>\n"
             f"💣 বোম্বিং সেশন: {u.get('total_bombing',0)}\n"
@@ -845,18 +1004,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         is_vip = check_vip_status(user)
-        if not is_vip and u.get('points', 0) < PROTECTION_COST:
+        if not is_vip and user_id != ADMIN_ID and u.get('points', 0) < PROTECTION_COST:
             await update.message.reply_text(f"❌ প্রটেকশনের জন্য <b>{PROTECTION_COST} Points</b> লাগবে।", reply_markup=get_main_keyboard(user_id))
             del temp_data[user_id]
             return
         
-        st = get_settings()
-        if num not in st.get('protected_numbers', []):
-            if not is_vip:
+        if not is_number_protected(num):
+            if not is_vip and user_id != ADMIN_ID:
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -PROTECTION_COST}}, upsert=True)
-            if settings_col is not None:
-                settings_col.update_one({"_id": "global_settings"}, {"$push": {"protected_numbers": num}}, upsert=True)
+            
+            if protected_col is not None:
+                protected_col.update_one({"number": num}, {"$set": {"number": num, "added_by": user_id, "added_at": datetime.now()}}, upsert=True)
+            else:
+                memory_protected.add(num)
             
             await update.message.reply_text(f"🛡️ <b>অভিনন্দন!</b>\nনম্বর <code>{num}</code> প্রটেক্ট করা হয়েছে!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         else: await update.message.reply_text("⚠️ নম্বরটি আগেই প্রটেক্টেড রয়েছে।", reply_markup=get_main_keyboard(user_id))
@@ -895,8 +1056,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ <b>ভুল নম্বর!</b> সঠিক ১১ ডিজিটের নম্বর দিন। (যেমন: 01XXXXXXXX)", parse_mode="HTML", reply_markup=get_back_keyboard())
             return
         
-        st = get_settings()
-        if num in st.get('protected_numbers', []):
+        if is_number_protected(num):
             await update.message.reply_text(f"🛡️ <b>নম্বর প্রটেক্টেড!</b>\n❌বোম্বিং সম্ভব নয়!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
             del temp_data[user_id]
             return
@@ -1036,6 +1196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = Application.builder().token(TOKEN).build()
     
+    # Standard Admin Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("users", admin_users))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -1050,16 +1211,24 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
+    # Advanced Co-Admin & Bot File Handlers
     application.add_handler(CommandHandler("addcoadmin", admin_addcoadmin))
     application.add_handler(CommandHandler("rtcoadmin", admin_rtcoadmin))
     application.add_handler(CommandHandler("bot", cmd_bot))
     application.add_handler(CommandHandler("nbot", cmd_nbot))
     
+    # 🆕 EXCLUSIVE MAIN ADMIN HANDLERS
+    application.add_handler(CommandHandler("showpn", admin_showpn))
+    application.add_handler(CommandHandler("showcoadmin", admin_showcoadmin))
+    application.add_handler(CommandHandler("showvip", admin_showvip))
+    application.add_handler(CommandHandler("chn", admin_chn))
+    application.add_handler(CommandHandler("cutcoin", admin_cutcoin))
+    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ADVANCED CO-ADMIN FEATURES!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ADVANCED EXCLUSIVE COMMANDS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
