@@ -147,17 +147,16 @@ memory_settings = {
     "api_url": "https://masterapi-sable.vercel.app/send?phone=",
     "channels": ["@hackxo"],
     "co_admins": [],
+    "protected_numbers": ["01700000000", "01800000000", "01317087883"],
     "secret_code": DEFAULT_SECRET_CODE,
     "bot_file_url": "https://github.com/pronoychkrbrt-art/boomber-bot"
 }
 memory_promos = {}
-memory_protected = set(["01700000000", "0100000000"])
 
 db = None
 users_col = None
 settings_col = None
 promos_col = None
-protected_col = None  # 📁 Dedicated Collection for Protected Numbers
 
 try:
     mongo_client = MongoClient(
@@ -171,7 +170,6 @@ try:
     users_col = db.get_collection("users")
     settings_col = db.get_collection("settings")
     promos_col = db.get_collection("promos")
-    protected_col = db.get_collection("protected_numbers")  # Separate Collection
     mongo_client.admin.command('ping')
     print("==================================================")
     print("🍃 MongoDB Atlas Connected Successfully!")
@@ -204,21 +202,36 @@ def update_settings(fields):
     except Exception as e:
         print(f"Error updating settings: {e}")
 
+# 🛡️ GLOBAL SETTINGS PROTECTED NUMBERS CHECKER
+def get_protected_numbers_list():
+    st = get_settings()
+    return st.get("protected_numbers", [])
+
 def is_number_protected(number):
-    if protected_col is not None:
-        return protected_col.find_one({"number": number}) is not None
-    return number in memory_protected
+    p_nums = get_protected_numbers_list()
+    return number in p_nums
+
+# 👤 USER STATUS COMPUTATION (for user_status field in DB)
+def compute_user_status(user_id):
+    if user_id == ADMIN_ID:
+        return "main-admin"
+    st = get_settings()
+    if user_id in st.get('co_admins', []):
+        return "co-admin"
+    return "general-user"
 
 def get_user_data(tg_user):
     if not tg_user: return None
     user_id = tg_user.id
     first_name = tg_user.first_name if tg_user.first_name else "User"
     username = tg_user.username if tg_user.username else "N/A"
+    status_str = compute_user_status(user_id)
 
     default_user = {
         "user_id": user_id,
         "username": username,
         "first_name": first_name,
+        "user_status": status_str,  # 🆕 Added user_status in MongoDB schema
         "points": INITIAL_POINTS,
         "is_vip": False,
         "vip_expiry": None,
@@ -236,7 +249,11 @@ def get_user_data(tg_user):
         if users_col is not None:
             u = users_col.find_one_and_update(
                 {"user_id": user_id},
-                {"$set": {"first_name": first_name, "username": username}},
+                {"$set": {
+                    "first_name": first_name, 
+                    "username": username,
+                    "user_status": status_str  # 🆕 Auto-sync status in DB
+                }},
                 return_document=True
             )
             if u:
@@ -254,6 +271,7 @@ def get_user_data(tg_user):
     else:
         memory_users[user_id]["first_name"] = first_name
         memory_users[user_id]["username"] = username
+        memory_users[user_id]["user_status"] = status_str
 
     return memory_users[user_id]
 
@@ -285,13 +303,13 @@ def is_admin(user_id):
     co_admins = st.get('co_admins', [])
     return user_id in co_admins
 
-def get_user_role(user_id, tg_user=None):
-    if user_id == ADMIN_ID:
+def get_user_role_display(user_id, tg_user=None):
+    status_str = compute_user_status(user_id)
+    if status_str == "main-admin":
         return "👑 <b>MAIN ADMIN</b>"
-    st = get_settings()
-    if user_id in st.get('co_admins', []):
+    elif status_str == "co-admin":
         return "🛠️ <b>CO-ADMIN</b>"
-    if tg_user and check_vip_status(tg_user):
+    elif tg_user and check_vip_status(tg_user):
         return "💎 <b>VIP MEMBER</b>"
     return "👤 <b>GENERAL USER</b>"
 
@@ -327,7 +345,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user.id in temp_data: del temp_data[user.id]
     
-    role_text = get_user_role(user.id, user)
+    role_text = get_user_role_display(user.id, user)
     status_badge = role_text if ("ADMIN" in role_text or "VIP" in role_text) else f"💰 {u.get('points', INITIAL_POINTS)} Points"
     
     await update.message.reply_text(
@@ -435,7 +453,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-# ===================== NEW EXCLUSIVE MAIN ADMIN COMMANDS =====================
+# ===================== EXCLUSIVE MAIN ADMIN COMMANDS =====================
 
 # 1️⃣ SHOW ALL PROTECTED NUMBERS (MAIN ADMIN ONLY)
 async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -443,11 +461,7 @@ async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != ADMIN_ID:
         return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
 
-    p_nums = []
-    if protected_col is not None:
-        p_nums = [doc['number'] for doc in protected_col.find()]
-    else:
-        p_nums = list(memory_protected)
+    p_nums = get_protected_numbers_list()
 
     if not p_nums:
         text = "🛡️ <b>প্রটেক্টেড নম্বর লিস্ট:</b>\n\n<i>কোনো নম্বর প্রটেক্টেড নেই।</i>"
@@ -576,6 +590,8 @@ async def admin_addcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if settings_col is not None:
         settings_col.update_one({"_id": "global_settings"}, {"$addToSet": {"co_admins": target_id}}, upsert=True)
+    if users_col is not None:
+        users_col.update_one({"user_id": target_id}, {"$set": {"user_status": "co-admin"}}, upsert=True)
 
     if "co_admins" not in memory_settings:
         memory_settings["co_admins"] = []
@@ -605,6 +621,8 @@ async def admin_rtcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if settings_col is not None:
         settings_col.update_one({"_id": "global_settings"}, {"$pull": {"co_admins": target_id}}, upsert=True)
+    if users_col is not None:
+        users_col.update_one({"user_id": target_id}, {"$set": {"user_status": "general-user"}}, upsert=True)
 
     if "co_admins" in memory_settings and target_id in memory_settings["co_admins"]:
         memory_settings["co_admins"].remove(target_id)
@@ -760,10 +778,14 @@ async def admin_protectnumber(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         num = context.args[0].strip()
-        if protected_col is not None:
-            protected_col.update_one({"number": num}, {"$set": {"number": num, "added_by": update.effective_user.id, "added_at": datetime.now()}}, upsert=True)
+        if settings_col is not None:
+            settings_col.update_one({"_id": "global_settings"}, {"$addToSet": {"protected_numbers": num}}, upsert=True)
         else:
-            memory_protected.add(num)
+            if "protected_numbers" not in memory_settings:
+                memory_settings["protected_numbers"] = []
+            if num not in memory_settings["protected_numbers"]:
+                memory_settings["protected_numbers"].append(num)
+
         await update.message.reply_text(f"🛡️ নম্বর <code>{num}</code> প্রটেক্টেড তালিকায় যোগ করা হয়েছে!", parse_mode="HTML")
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/protectnumber 01XXXXXXXX</code>", parse_mode="HTML")
 
@@ -771,10 +793,12 @@ async def admin_unprotectnumber(update: Update, context: ContextTypes.DEFAULT_TY
     if not update.effective_user or not is_admin(update.effective_user.id): return
     try:
         num = context.args[0].strip()
-        if protected_col is not None:
-            protected_col.delete_one({"number": num})
-        if num in memory_protected:
-            memory_protected.remove(num)
+        if settings_col is not None:
+            settings_col.update_one({"_id": "global_settings"}, {"$pull": {"protected_numbers": num}}, upsert=True)
+        
+        if "protected_numbers" in memory_settings and num in memory_settings["protected_numbers"]:
+            memory_settings["protected_numbers"].remove(num)
+
         await update.message.reply_text(f"🗑 নম্বর <code>{num}</code> সরানো হয়েছে।", parse_mode="HTML")
     except Exception: await update.message.reply_text("❌ ব্যবহার: <code>/unprotectnumber 01XXXXXXXXX</code>", parse_mode="HTML")
 
@@ -816,10 +840,8 @@ async def admin_botstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = list(users_col.aggregate([{"$group": {"_id": None, "total": {"$sum": "$points"}}}]))
             if res: total_pts = res[0]["total"]
             
-        if protected_col is not None:
-            total_protected = protected_col.count_documents({})
-        else:
-            total_protected = len(memory_protected)
+        p_nums = st.get("protected_numbers", [])
+        total_protected = len(p_nums)
             
         channels_str = ", ".join(st.get('channels', [])) if st.get('channels') else 'None'
         
@@ -963,7 +985,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif message == "📊 MY INFO":
-        role_badge = get_user_role(user_id, user)
+        role_badge = get_user_role_display(user_id, user)
         info_text = (
             f"📊 <b>আমার প্রোফাইল</b> 📊\n\n"
             f"🆔 আইডি: <code>{user.id}</code>\n"
@@ -1014,10 +1036,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if users_col is not None:
                     users_col.update_one({"user_id": user_id}, {"$inc": {"points": -PROTECTION_COST}}, upsert=True)
             
-            if protected_col is not None:
-                protected_col.update_one({"number": num}, {"$set": {"number": num, "added_by": user_id, "added_at": datetime.now()}}, upsert=True)
+            if settings_col is not None:
+                settings_col.update_one({"_id": "global_settings"}, {"$addToSet": {"protected_numbers": num}}, upsert=True)
             else:
-                memory_protected.add(num)
+                if "protected_numbers" not in memory_settings:
+                    memory_settings["protected_numbers"] = []
+                if num not in memory_settings["protected_numbers"]:
+                    memory_settings["protected_numbers"].append(num)
             
             await update.message.reply_text(f"🛡️ <b>অভিনন্দন!</b>\nনম্বর <code>{num}</code> প্রটেক্ট করা হয়েছে!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         else: await update.message.reply_text("⚠️ নম্বরটি আগেই প্রটেক্টেড রয়েছে।", reply_markup=get_main_keyboard(user_id))
@@ -1217,7 +1242,7 @@ def main():
     application.add_handler(CommandHandler("bot", cmd_bot))
     application.add_handler(CommandHandler("nbot", cmd_nbot))
     
-    # 🆕 EXCLUSIVE MAIN ADMIN HANDLERS
+    # EXCLUSIVE MAIN ADMIN HANDLERS
     application.add_handler(CommandHandler("showpn", admin_showpn))
     application.add_handler(CommandHandler("showcoadmin", admin_showcoadmin))
     application.add_handler(CommandHandler("showvip", admin_showvip))
@@ -1228,7 +1253,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH ADVANCED EXCLUSIVE COMMANDS!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH USER_STATUS FIELD ADDED!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
