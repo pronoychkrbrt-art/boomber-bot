@@ -497,12 +497,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
 
+        # 🎨 রঙিন লোডিং বারের ইমোজি লিস্ট (১০টি ঘর)
+        color_blocks = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "🟦", "🟩"]
+
         msg = await query.message.edit_text(
             f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
             f"📱 টার্গেট: <code>{number}</code>\n"
-            f"📊 প্রগ্রেস: <code>[▱▱▱▱▱▱▱▱▱▱]</code> <b>0% (হিট: 0/{amount})</b>\n\n"
-            f"✅ মোট সফল SMS: <b>0</b>\n"
-            f"❌ মোট ব্যর্থ SMS: <b>0</b>",
+            f"📊 প্রগ্রেস: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ <b>0%</b>",
             parse_mode="HTML"
         )
         
@@ -534,16 +535,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Error occurred during hit {i+1}: {e}")
 
             percent = int(((i + 1) / amount) * 100)
-            filled = int(10 * (i + 1) // amount)
-            bar = '▰' * filled + '▱' * (10 - filled)
+            filled = min(10, max(1, int(10 * (i + 1) // amount)))
+            
+            # 🎨 রঙিন ঘর দিয়ে গঠিত প্রগ্রেস বার
+            bar = "".join(color_blocks[:filled]) + "⬜" * (10 - filled)
 
             try:
                 await msg.edit_text(
                     f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
                     f"📱 টার্গেট: <code>{number}</code>\n"
-                    f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}% (হিট: {i+1}/{amount})</b>\n\n"
-                    f"✅ মোট সফল SMS: <b>{total_sent_count}</b>\n"
-                    f"❌ মোট ব্যর্থ SMS: <b>{total_failed_count}</b>",
+                    f"📊 প্রগ্রেস: {bar} <b>{percent}%</b>",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -570,7 +571,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
         balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
 
-        # 🎯 আপডেট করা রেজাল্ট মেসেজ (অনুরোধকৃত ফিল্ডগুলো রিমুভ করা হয়েছে)
+        # 🎯 বোম্বিং শেষের মেসেজ
         result_message = (
             f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
             f"📱 টার্গেট: <code>{number}</code>\n"
@@ -1215,7 +1216,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         temp_data[user_id]['number'] = num
         
-        # 🎯 ছবি অনুযায়ী ইনলাইন বাটন পাঠানো হচ্ছে
         mode_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal")],
             [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme")]
@@ -1264,7 +1264,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH INLINE MODES!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH COLORFUL PROGRESS BAR!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
