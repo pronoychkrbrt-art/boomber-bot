@@ -30,7 +30,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
-TOKEN = "8879095437:AAEmzxYQpQ3NobCjrGS75xjIzYhm2qhxs-8"
+TOKEN = "8879095437:AAGtxDsSWFLvmToKClfNy0-x3y9Pl2Ohh8Y"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 DEFAULT_SECRET_CODE = "123456"
@@ -320,7 +320,6 @@ def get_user_role_display(user_id, tg_user=None):
         return "💎 <b>VIP MEMBER</b>"
     return "👤 <b>GENERAL USER</b>"
 
-# 🛠️ FIXED: চ্যানেল জয়েনিং চেক বাগ ফিক্স করা হয়েছে (অন্যদের না চলার কারণ)
 async def get_unjoined_channels(user_id, context):
     if is_admin(user_id):
         return []
@@ -334,7 +333,6 @@ async def get_unjoined_channels(user_id, context):
             if member.status not in ['member', 'administrator', 'creator']:
                 unjoined.append(ch)
         except Exception as e:
-            # বট যদি চ্যানেলে এডমিন না থাকে, তাহলে ইউজারদের আটকাবে না
             logger.warning(f"Could not check membership for {ch}: {e}")
             pass
     return unjoined
@@ -467,7 +465,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🎯 MODE SELECTION INLINE BUTTON HANDLER (রঙিন ইমোজি দিয়ে সাজানো)
     elif query.data in ['mode_normal', 'mode_extreme']:
         await query.answer()
         
@@ -504,7 +501,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
 
-        # 🎯 ক্লাসিক লোডিং বার [▰▰▰▰▰▰▰▰▱▱] (আগের মতোই ফেরত আনা হয়েছে)
         msg = await query.message.edit_text(
             f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
             f"📱 টার্গেট: <code>{number}</code>\n"
@@ -1226,10 +1222,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         temp_data[user_id]['number'] = num
         
-        # 🎨 রঙিন বাটন (সবুজ 🟩 এবং লাল 🟥 ইমোজি সহ)
+        # 🎯 নেটিভ বাটনের ব্যাকগ্রাউন্ড কালার (Bot API 9.4: success = Green, danger = Red)
         mode_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟩 👎 Elite Mode", callback_data="mode_normal")],
-            [InlineKeyboardButton("🟥 🦇 Extreme Mode", callback_data="mode_extreme")]
+            [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme", api_kwargs={"style": "danger"})]
         ])
         
         await update.message.reply_text(
@@ -1275,7 +1271,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE & FULLY FIXED!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH STYLED BUTTONS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
