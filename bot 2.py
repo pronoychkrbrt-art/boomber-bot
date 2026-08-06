@@ -227,6 +227,13 @@ def compute_user_status(user_id):
         return "co-admin"
     return "general-user"
 
+def is_admin(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    st = get_settings()
+    co_admins = st.get('co_admins', [])
+    return user_id in co_admins
+
 def get_user_data(tg_user):
     if not tg_user: return None
     user_id = tg_user.id
@@ -303,13 +310,6 @@ def check_vip_status(tg_user):
 
 temp_data = {}
 
-def is_admin(user_id):
-    if user_id == ADMIN_ID:
-        return True
-    st = get_settings()
-    co_admins = st.get('co_admins', [])
-    return user_id in co_admins
-
 def get_user_role_display(user_id, tg_user=None):
     status_str = compute_user_status(user_id)
     if status_str == "main-admin":
@@ -320,16 +320,23 @@ def get_user_role_display(user_id, tg_user=None):
         return "💎 <b>VIP MEMBER</b>"
     return "👤 <b>GENERAL USER</b>"
 
+# 🛠️ FIXED: চ্যানেল জয়েনিং চেক বাগ ফিক্স করা হয়েছে (অন্যদের না চলার কারণ)
 async def get_unjoined_channels(user_id, context):
+    if is_admin(user_id):
+        return []
+        
     st = get_settings()
     unjoined = []
     for ch in st.get('channels', ["@hackxo"]):
+        if not ch: continue
         try:
             member = await context.bot.get_chat_member(chat_id=ch, user_id=user_id)
             if member.status not in ['member', 'administrator', 'creator']:
                 unjoined.append(ch)
-        except Exception:
-            unjoined.append(ch)
+        except Exception as e:
+            # বট যদি চ্যানেলে এডমিন না থাকে, তাহলে ইউজারদের আটকাবে না
+            logger.warning(f"Could not check membership for {ch}: {e}")
+            pass
     return unjoined
 
 def get_main_keyboard(user_id):
@@ -460,7 +467,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_join_prompt(update, unjoined, is_error=True)
 
-    # 🎯 MODE SELECTION INLINE BUTTON HANDLER
+    # 🎯 MODE SELECTION INLINE BUTTON HANDLER (রঙিন ইমোজি দিয়ে সাজানো)
     elif query.data in ['mode_normal', 'mode_extreme']:
         await query.answer()
         
@@ -497,13 +504,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if users_col is not None:
             users_col.update_one({"user_id": user_id}, {"$set": {"last_bombing": datetime.now()}}, upsert=True)
 
-        # 🎨 রঙিন লোডিং বারের ইমোজি লিস্ট (১০টি ঘর)
-        color_blocks = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "🟦", "🟩"]
-
+        # 🎯 ক্লাসিক লোডিং বার [▰▰▰▰▰▰▰▰▱▱] (আগের মতোই ফেরত আনা হয়েছে)
         msg = await query.message.edit_text(
             f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
             f"📱 টার্গেট: <code>{number}</code>\n"
-            f"📊 প্রগ্রেস: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ <b>0%</b>",
+            f"📊 প্রগ্রেস: <code>[▱▱▱▱▱▱▱▱▱▱]</code> <b>0%</b>",
             parse_mode="HTML"
         )
         
@@ -535,16 +540,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Error occurred during hit {i+1}: {e}")
 
             percent = int(((i + 1) / amount) * 100)
-            filled = min(10, max(1, int(10 * (i + 1) // amount)))
-            
-            # 🎨 রঙিন ঘর দিয়ে গঠিত প্রগ্রেস বার
-            bar = "".join(color_blocks[:filled]) + "⬜" * (10 - filled)
+            filled = int(10 * (i + 1) // amount)
+            bar = '▰' * filled + '▱' * (10 - filled)
 
             try:
                 await msg.edit_text(
                     f"💣 <b>BOMBING IN PROGRESS...</b> ⌛\n\n"
                     f"📱 টার্গেট: <code>{number}</code>\n"
-                    f"📊 প্রগ্রেস: {bar} <b>{percent}%</b>",
+                    f"📊 প্রগ্রেস: <code>[{bar}]</code> <b>{percent}%</b>",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -571,7 +574,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cost_text = "FREE (VIP)" if is_vip else f"{total_cost} Points"
         balance_text = "VIP Access" if is_vip else f"{fresh_u.get('points', 0)} Points"
 
-        # 🎯 বোম্বিং শেষের মেসেজ
         result_message = (
             f"✅ <b>বোম্বিং সফলভাবে সম্পন্ন!</b> ✅\n\n"
             f"📱 টার্গেট: <code>{number}</code>\n"
@@ -1054,7 +1056,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         temp_data[user_id] = {'step': 'awaiting_number'}
-        await update.message.reply_text("📞 <b>১১ ডিজিট নাম্বার দিন:</b>", parse_mode="HTML", reply_markup=get_back_keyboard())
+        
+        # 🎯 স্ক্রিনশট ২ এর সাথে ম্যাচ করে টেক্সট দেওয়া হয়েছে
+        await update.message.reply_text(
+            "📱 <b>START BOMBER</b>\n\n"
+            "দয়া করে টার্গেট নম্বর দিন:\n"
+            "উদাহরণ: <code>01XXXXXXXX</code>",
+            parse_mode="HTML",
+            reply_markup=get_back_keyboard()
+        )
         return
 
     elif message == "💰 EARN POINTS":
@@ -1216,9 +1226,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         temp_data[user_id]['number'] = num
         
+        # 🎨 রঙিন বাটন (সবুজ 🟩 এবং লাল 🟥 ইমোজি সহ)
         mode_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal")],
-            [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme")]
+            [InlineKeyboardButton("🟩 👎 Elite Mode", callback_data="mode_normal")],
+            [InlineKeyboardButton("🟥 🦇 Extreme Mode", callback_data="mode_extreme")]
         ])
         
         await update.message.reply_text(
@@ -1264,7 +1275,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH COLORFUL PROGRESS BAR!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE & FULLY FIXED!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
