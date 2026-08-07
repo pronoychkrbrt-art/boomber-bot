@@ -30,7 +30,7 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
-TOKEN = "8879095437:AAGtxDsSWFLvmToKClfNy0-x3y9Pl2Ohh8Y"
+TOKEN = "8879095437:AAE3YjggoU95QstbI9wNvX_cIm0HwDTBdQo"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 DEFAULT_SECRET_CODE = "123456"
