@@ -1129,8 +1129,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 পয়েন্ট: <b>{u.get('points',0)} Points</b>\n\n"
             f"👥 রেফার: <b>{u.get('referral_count',0)} জন</b>\n"
             f"💣 বোম্বিং সেশন: {u.get('total_bombing',0)}\n"
-            f"✅ সফল SMS: {u.get('total_success',0)}\n"
-            f"❌ ব্যর্থ SMS: {u.get('total_failed',0)}"
         )
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
@@ -1223,8 +1221,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         temp_data[user_id]['number'] = num
         
         mode_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme", api_kwargs={"style": "danger"})]
+            [InlineKeyboardButton("💥Normal Mode💥", callback_data="mode_normal", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("😈🔥Extreme Mode🔥😈", callback_data="mode_extreme", api_kwargs={"style": "danger"})]
         ])
         
         await update.message.reply_text(
