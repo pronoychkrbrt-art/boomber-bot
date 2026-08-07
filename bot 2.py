@@ -30,12 +30,12 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
-TOKEN = "8879095437:AAGtxDsSWFLvmToKClfNy0-x3y9Pl2Ohh8Y"
+TOKEN = "8879095437:AAEmzxYQpQ3NobCjrGS75xjIzYhm2qhxs-8"
 ADMIN_ID = 7033711819
 OWNER_USERNAME = "@Dipcb01"
 DEFAULT_SECRET_CODE = "123456"
 
-# 🎯 MODE CONFIGURATION (এখানে কয়েন ও হিটের সংখ্যা পরিবর্তন করতে পারবেন)
+# 🎯 MODE CONFIGURATION
 NORMAL_MODE_HITS = 5
 NORMAL_MODE_COST = 1
 
@@ -60,7 +60,7 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://boomber-bot.onrender
 def home():
     return "🤖 SMS Bomber Bot is Running 24/7 Alive!"
 
-# 🎯 MINI APP REWARD API ENDPOINT (CORS FIXED)
+# 🎯 MINI APP REWARD API ENDPOINT
 @flask_app.route('/api/claim-reward', methods=['POST', 'OPTIONS'])
 def claim_reward_api():
     if request.method == 'OPTIONS':
@@ -209,7 +209,6 @@ def update_settings(fields):
     except Exception as e:
         print(f"Error updating settings: {e}")
 
-# 🛡️ GLOBAL SETTINGS PROTECTED NUMBERS CHECKER
 def get_protected_numbers_list():
     st = get_settings()
     return st.get("protected_numbers", [])
@@ -218,7 +217,6 @@ def is_number_protected(number):
     p_nums = get_protected_numbers_list()
     return number in p_nums
 
-# 👤 USER STATUS COMPUTATION
 def compute_user_status(user_id):
     if user_id == ADMIN_ID:
         return "main-admin"
@@ -320,6 +318,7 @@ def get_user_role_display(user_id, tg_user=None):
         return "💎 <b>VIP MEMBER</b>"
     return "👤 <b>GENERAL USER</b>"
 
+# 🛠️ SAFE CHANNEL CHECK: চ্যানেল পারমিশন এরর হলে ইউজারকে ব্লক করবে না
 async def get_unjoined_channels(user_id, context):
     if is_admin(user_id):
         return []
@@ -327,13 +326,14 @@ async def get_unjoined_channels(user_id, context):
     st = get_settings()
     unjoined = []
     for ch in st.get('channels', ["@hackxo"]):
-        if not ch: continue
+        if not ch or not ch.strip(): continue
         try:
-            member = await context.bot.get_chat_member(chat_id=ch, user_id=user_id)
+            member = await context.bot.get_chat_member(chat_id=ch.strip(), user_id=user_id)
             if member.status not in ['member', 'administrator', 'creator']:
-                unjoined.append(ch)
+                unjoined.append(ch.strip())
         except Exception as e:
-            logger.warning(f"Could not check membership for {ch}: {e}")
+            # বট যদি চ্যানেলে অ্যাডমিন না থাকে তবে সাইলেন্টলি ইগনোর করবে
+            logger.warning(f"Channel check ignored for {ch}: {e}")
             pass
     return unjoined
 
@@ -460,7 +460,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
@@ -592,14 +592,12 @@ async def admin_showpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ শুধুমাত্র মেইন অ্যাডমিন এই কমান্ডটি ব্যবহার করতে পারবেন!", parse_mode="HTML")
 
     p_nums = get_protected_numbers_list()
-
     if not p_nums:
         text = "🛡️ <b>প্রটেক্টেড নম্বর লিস্ট:</b>\n\n<i>কোনো নম্বর প্রটেক্টেড নেই।</i>"
     else:
         text = f"🛡️ <b>প্রটেক্টেড নম্বর লিস্ট ({len(p_nums)}টি):</b>\n\n"
         for num in p_nums:
             text += f"• <code>{num}</code>\n"
-
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -609,7 +607,6 @@ async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     st = get_settings()
     co_admins = st.get('co_admins', [])
-
     if not co_admins:
         text = "🛠️ <b>কো-অ্যাডমিন লিস্ট:</b>\n\n<i>কোনো কো-অ্যাডমিন যুক্ত নেই।</i>"
     else:
@@ -619,7 +616,6 @@ async def admin_showcoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = u_info.get("username", "N/A") if u_info else "N/A"
             name = u_info.get("first_name", "User") if u_info else "User"
             text += f"• <code>{ca_id}</code> | {name} (@{username})\n"
-
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_showvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -642,7 +638,6 @@ async def admin_showvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(exp, datetime):
                 exp = exp.strftime("%Y-%m-%d %H:%M")
             text += f"• <code>{v.get('user_id')}</code> | {v.get('first_name', 'User')} (@{v.get('username', 'N/A')})\n  ⏳ মেয়াদ: {exp}\n\n"
-
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_chn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -887,7 +882,6 @@ async def admin_removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users_col.update_one({"user_id": target_id}, {"$set": {"is_vip": False, "vip_expiry": None}}, upsert=True)
         
         await update.message.reply_text(f"🚫 <b>ইউজার <code>{target_id}</code> এর VIP সুবিধা বাতিল করা হয়েছে!</b>", parse_mode="HTML")
-        
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
@@ -1053,7 +1047,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         temp_data[user_id] = {'step': 'awaiting_number'}
         
-        # 🎯 স্ক্রিনশট ২ এর সাথে ম্যাচ করে টেক্সট দেওয়া হয়েছে
         await update.message.reply_text(
             "📱 <b>START BOMBER</b>\n\n"
             "দয়া করে টার্গেট নম্বর দিন:\n"
@@ -1222,7 +1215,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         temp_data[user_id]['number'] = num
         
-        # 🎯 নেটিভ বাটনের ব্যাকগ্রাউন্ড কালার (Bot API 9.4: success = Green, danger = Red)
         mode_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("👎 Elite Mode", callback_data="mode_normal", api_kwargs={"style": "success"})],
             [InlineKeyboardButton("🦇 Extreme Mode", callback_data="mode_extreme", api_kwargs={"style": "danger"})]
@@ -1235,11 +1227,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+# 🛡️ GLOBAL CRASH-PROOF ERROR HANDLER
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
 # ===================== MAIN FUNCTION =====================
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # Standard Admin Handlers
+    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("users", admin_users))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -1254,13 +1250,11 @@ def main():
     application.add_handler(CommandHandler("setapi", admin_setapi))
     application.add_handler(CommandHandler("botstats", admin_botstats))
     
-    # Advanced Co-Admin & Bot File Handlers
     application.add_handler(CommandHandler("addcoadmin", admin_addcoadmin))
     application.add_handler(CommandHandler("rtcoadmin", admin_rtcoadmin))
     application.add_handler(CommandHandler("bot", cmd_bot))
     application.add_handler(CommandHandler("nbot", cmd_nbot))
     
-    # EXCLUSIVE MAIN ADMIN HANDLERS
     application.add_handler(CommandHandler("showpn", admin_showpn))
     application.add_handler(CommandHandler("showcoadmin", admin_showcoadmin))
     application.add_handler(CommandHandler("showvip", admin_showvip))
@@ -1270,8 +1264,11 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
+    # 💥 Global Crash Guard
+    application.add_error_handler(global_error_handler)
+    
     print("="*50)
-    print("🤖 MASTER SMS BOMBER BOT IS ONLINE WITH STYLED BUTTONS!")
+    print("🤖 MASTER SMS BOMBER BOT IS ONLINE & FIXED FOR ALL USERS!")
     print("="*50)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
