@@ -318,7 +318,6 @@ def get_user_role_display(user_id, tg_user=None):
         return "💎 <b>VIP MEMBER</b>"
     return "👤 <b>GENERAL USER</b>"
 
-# 🛠️ SAFE CHANNEL CHECK: চ্যানেল পারমিশন এরর হলে ইউজারকে ব্লক করবে না
 async def get_unjoined_channels(user_id, context):
     if is_admin(user_id):
         return []
@@ -332,7 +331,6 @@ async def get_unjoined_channels(user_id, context):
             if member.status not in ['member', 'administrator', 'creator']:
                 unjoined.append(ch.strip())
         except Exception as e:
-            # বট যদি চ্যানেলে অ্যাডমিন না থাকে তবে সাইলেন্টলি ইগনোর করবে
             logger.warning(f"Channel check ignored for {ch}: {e}")
             pass
     return unjoined
@@ -350,6 +348,7 @@ def get_main_keyboard(user_id):
 
 def get_back_keyboard(): return ReplyKeyboardMarkup([["🔙 ব্যাক"]], resize_keyboard=True)
 
+# 🛠️ FIXED MAIN MENU FUNCTION: যেকোনো মেসেজ/কলব্যাকের পর সঠিকভাবে মেনু দেখাবে
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
@@ -360,13 +359,20 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role_text = get_user_role_display(user.id, user)
     status_badge = role_text if ("ADMIN" in role_text or "VIP" in role_text) else f"💰 {u.get('points', INITIAL_POINTS)} Points"
     
-    await update.message.reply_text(
+    text = (
         f"🔥 <b>WELCOME TO SMS BOMBER BOT</b> 🔥\n\n"
         f"👤 <b>ইউজার:</b> {u.get('first_name', user.first_name)}\n"
         f"🆔 <b>আইডি:</b> <code>{user.id}</code>\n"
         f"🔰 <b>স্ট্যাটাস:</b> {status_badge}\n\n"
-        f"📌 <i>নিচের বাটন থেকে আপনার কাঙ্ক্ষিত অপশন সিলেক্ট করুন:</i>",
-        parse_mode="HTML", reply_markup=get_main_keyboard(user.id)
+        f"📌 <i>নিচের বাটন থেকে আপনার কাঙ্ক্ষিত অপশন সিলেক্ট করুন:</i>"
+    )
+
+    chat_id = update.effective_chat.id if update.effective_chat else user.id
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=get_main_keyboard(user.id)
     )
 
 async def send_join_prompt(update: Update, unjoined_channels, is_error=False):
@@ -460,7 +466,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
 
-            await asyncio.sleep(2)
+            # 🛠️ ৫ সেকেন্ড পর অটো বটের মেনু বাটন শো করাবে
+            await asyncio.sleep(5)
             await main_menu(update, context)
         else:
             await send_join_prompt(update, unjoined, is_error=True)
