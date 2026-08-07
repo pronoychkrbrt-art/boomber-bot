@@ -1133,8 +1133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
-    elif message == "📞 CONTACT ADMIN":
-        await update.message.reply_text(f"📞 <b>কন্ট্যাক্ট অ্যাডমিন</b>\n\n👨‍💻 অ্যাডমিন: {OWNER_USERNAME}\n🔗 কন্ট্যাক্ট: https://t.me/{OWNER_USERNAME.replace('@', '')}", reply_markup=get_main_keyboard(user_id))
+   elif message == "📞 CONTACT ADMIN": await update.message.reply_text(f"📞 <b>কন্ট্যাক্ট অ্যাডমিন</b>\n\n👨‍💻 অ্যাডমিন: {OWNER_USERNAME}", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
     elif message == "⚙️ ADMIN PANEL" and is_admin(user_id):
