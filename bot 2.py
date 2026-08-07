@@ -348,7 +348,6 @@ def get_main_keyboard(user_id):
 
 def get_back_keyboard(): return ReplyKeyboardMarkup([["🔙 ব্যাক"]], resize_keyboard=True)
 
-# 🛠️ FIXED MAIN MENU FUNCTION: যেকোনো মেসেজ/কলব্যাকের পর সঠিকভাবে মেনু দেখাবে
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
@@ -466,7 +465,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
 
-            # 🛠️ ৫ সেকেন্ড পর অটো বটের মেনু বাটন শো করাবে
             await asyncio.sleep(5)
             await main_menu(update, context)
         else:
@@ -1133,7 +1131,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
-   elif message == "📞 CONTACT ADMIN": await update.message.reply_text(f"📞 <b>কন্ট্যাক্ট অ্যাডমিন</b>\n\n👨‍💻 অ্যাডমিন: {OWNER_USERNAME}", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
+    elif message == "📞 CONTACT ADMIN":
+        await update.message.reply_text(f"📞 <b>কন্ট্যাক্ট অ্যাডমিন</b>\n\n👨‍💻 অ্যাডমিন: {OWNER_USERNAME}", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
         return
 
     elif message == "⚙️ ADMIN PANEL" and is_admin(user_id):
