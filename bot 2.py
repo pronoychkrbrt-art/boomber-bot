@@ -31,8 +31,8 @@ from pymongo.server_api import ServerApi
 
 # ===================== CONFIGURATION =====================
 TOKEN = "8941582351:AAE4PCdg_CcsM0ynjf630uc7SBL2arc60jM"
-ADMIN_ID = 7033711819
-OWNER_USERNAME = "@Dipcb01"
+ADMIN_ID = 8991148411
+OWNER_USERNAME = "@Dipcb001"
 DEFAULT_SECRET_CODE = "123456"
 
 # 🎯 MODE CONFIGURATION
